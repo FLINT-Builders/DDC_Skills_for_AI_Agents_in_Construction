@@ -1,0 +1,3 @@
+# Per-user Claude Code settings. Never commit: allow rules here are applied
+# without a prompt for everyone who clones and trusts the repository.
+.claude/settings.local.json
