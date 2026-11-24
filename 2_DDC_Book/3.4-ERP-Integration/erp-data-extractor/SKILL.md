@@ -22,11 +22,12 @@ Structured extraction and transformation of construction ERP data for analytics,
 
 ```python
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 import json
+import re
 
 
 class ERPModule(Enum):
@@ -272,22 +273,32 @@ class ERPDataExtractor:
 
         return output_path
 
-    def generate_sql_query(self, source: DataSource) -> str:
-        """Generate SQL query for data source."""
+    def generate_sql_query(self, source: DataSource,
+                           placeholder: str = "?") -> Tuple[str, List[Any]]:
+        """Generate a parameterized SQL query for a data source.
+
+        Returns (sql, params) for cursor.execute(sql, params). Filter values are
+        bound by the driver, never inlined. Use placeholder="%s" for psycopg/MySQL.
+        """
+
+        if placeholder not in ("?", "%s"):
+            raise ValueError("placeholder must be '?' or '%s'")
+        for name in [source.table_name, *source.columns, *source.filters.keys()]:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?", str(name)):
+                raise ValueError(f"Invalid SQL identifier: {name!r}")
 
         columns = ", ".join(source.columns)
         query = f"SELECT {columns}\nFROM {source.table_name}"
+        params: List[Any] = []
 
         if source.filters:
             conditions = []
             for col, value in source.filters.items():
-                if isinstance(value, str):
-                    conditions.append(f"{col} = '{value}'")
-                else:
-                    conditions.append(f"{col} = {value}")
+                conditions.append(f"{col} = {placeholder}")
+                params.append(value)
             query += "\nWHERE " + " AND ".join(conditions)
 
-        return query + ";"
+        return query + ";", params
 ```
 
 ## Quick Start
