@@ -15,10 +15,67 @@ Based on DDC methodology (Chapter 2.1), this skill builds SQL queries for constr
 ## Quick Start
 
 ```python
+import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Any, Union
+from typing import List, Dict, Optional, Any, Union, NamedTuple
 from datetime import datetime, date
+
+
+class ParameterizedQuery(NamedTuple):
+    """SQL text with driver placeholders plus the values to bind, in order.
+
+    Unpacks as ``sql, params = query`` and is meant for ``cursor.execute(sql, params)``.
+    Values are never written into ``sql``.
+    """
+    sql: str
+    params: List[Any]
+
+
+_IDENTIFIER_PART = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_PARAMSTYLES = ("qmark", "format", "numeric_dollar")
+_DEFAULT_PARAMSTYLE = {"postgresql": "format", "mysql": "format", "sqlite": "qmark"}
+
+
+def validate_identifier(name: str, allow_star: bool = False) -> str:
+    """Accept only plain or dotted SQL identifiers (e.g. ``status``, ``ci.wbs_code``)."""
+    if not isinstance(name, str):
+        raise TypeError(f"SQL identifier must be a string, got {type(name).__name__}")
+    parts = name.split(".")
+    if len(parts) > 2:
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    for index, part in enumerate(parts):
+        if allow_star and part == "*" and index == len(parts) - 1:
+            continue
+        if not _IDENTIFIER_PART.fullmatch(part):
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
+
+
+def validate_non_negative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
+
+
+class QueryParams:
+    """Collects bound values and emits the matching driver placeholder for each."""
+
+    def __init__(self, paramstyle: str = "format"):
+        if paramstyle not in _PARAMSTYLES:
+            raise ValueError(f"paramstyle must be one of {_PARAMSTYLES}")
+        self.paramstyle = paramstyle
+        self.values: List[Any] = []
+
+    def add(self, value: Any) -> str:
+        self.values.append(value)
+        if self.paramstyle == "qmark":
+            return "?"
+        if self.paramstyle == "numeric_dollar":
+            return f"${len(self.values)}"
+        return "%s"
 
 class QueryType(Enum):
     """Types of SQL queries"""
@@ -67,32 +124,29 @@ class WhereCondition:
     value: Any
     table_alias: Optional[str] = None
 
-    def to_sql(self) -> str:
+    def to_sql(self, params: QueryParams) -> str:
+        """Render the condition; values are appended to ``params`` and replaced by placeholders."""
+        validate_identifier(self.column)
+        if self.table_alias:
+            validate_identifier(self.table_alias)
         col = f"{self.table_alias}.{self.column}" if self.table_alias else self.column
+        operator = ComparisonOperator(self.operator)
 
-        if self.operator == ComparisonOperator.IS_NULL:
+        if operator == ComparisonOperator.IS_NULL:
             return f"{col} IS NULL"
-        elif self.operator == ComparisonOperator.IS_NOT_NULL:
+        elif operator == ComparisonOperator.IS_NOT_NULL:
             return f"{col} IS NOT NULL"
-        elif self.operator == ComparisonOperator.IN:
-            values = ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in self.value)
-            return f"{col} IN ({values})"
-        elif self.operator == ComparisonOperator.BETWEEN:
-            return f"{col} BETWEEN {self._format_value(self.value[0])} AND {self._format_value(self.value[1])}"
-        elif self.operator == ComparisonOperator.LIKE:
-            return f"{col} LIKE '{self.value}'"
+        elif operator == ComparisonOperator.IN:
+            values = list(self.value)
+            if not values:
+                raise ValueError("IN condition needs at least one value")
+            placeholders = ", ".join(params.add(v) for v in values)
+            return f"{col} IN ({placeholders})"
+        elif operator == ComparisonOperator.BETWEEN:
+            low, high = self.value
+            return f"{col} BETWEEN {params.add(low)} AND {params.add(high)}"
         else:
-            return f"{col} {self.operator.value} {self._format_value(self.value)}"
-
-    def _format_value(self, value: Any) -> str:
-        if isinstance(value, str):
-            return f"'{value}'"
-        elif isinstance(value, (date, datetime)):
-            return f"'{value.isoformat()}'"
-        elif value is None:
-            return "NULL"
-        else:
-            return str(value)
+            return f"{col} {operator.value} {params.add(self.value)}"
 
 @dataclass
 class JoinClause:
@@ -104,7 +158,9 @@ class JoinClause:
     on_right: str
 
     def to_sql(self) -> str:
-        return f"{self.join_type.value} {self.table} {self.alias} ON {self.on_left} = {self.on_right}"
+        for name in (self.table, self.alias, self.on_left, self.on_right):
+            validate_identifier(name)
+        return f"{JoinType(self.join_type).value} {self.table} {self.alias} ON {self.on_left} = {self.on_right}"
 
 @dataclass
 class SelectColumn:
@@ -115,13 +171,16 @@ class SelectColumn:
     alias: Optional[str] = None
 
     def to_sql(self) -> str:
+        validate_identifier(self.column, allow_star=True)
+        if self.table_alias:
+            validate_identifier(self.table_alias)
         col = f"{self.table_alias}.{self.column}" if self.table_alias else self.column
 
         if self.aggregate:
-            col = f"{self.aggregate.value}({col})"
+            col = f"{AggregateFunction(self.aggregate).value}({col})"
 
         if self.alias:
-            col = f"{col} AS {self.alias}"
+            col = f"{col} AS {validate_identifier(self.alias)}"
 
         return col
 
@@ -133,6 +192,9 @@ class OrderBy:
     table_alias: Optional[str] = None
 
     def to_sql(self) -> str:
+        validate_identifier(self.column)
+        if self.table_alias:
+            validate_identifier(self.table_alias)
         col = f"{self.table_alias}.{self.column}" if self.table_alias else self.column
         direction = "DESC" if self.descending else "ASC"
         return f"{col} {direction}"
@@ -142,11 +204,22 @@ class ConstructionQueryBuilder:
     """
     Build SQL queries for construction databases.
     Based on DDC methodology Chapter 2.1.
+
+    Every builder method returns a ParameterizedQuery (sql, params). Values are
+    bound by the database driver, never inlined into the SQL text. paramstyle
+    selects the placeholder: "format" (%s, psycopg/MySQL drivers), "qmark"
+    (?, sqlite3/pyodbc) or "numeric_dollar" ($1, asyncpg).
     """
 
-    def __init__(self, dialect: str = "postgresql"):
+    def __init__(self, dialect: str = "postgresql", paramstyle: Optional[str] = None):
         self.dialect = dialect
+        self.paramstyle = paramstyle or _DEFAULT_PARAMSTYLE.get(dialect, "qmark")
+        if self.paramstyle not in _PARAMSTYLES:
+            raise ValueError(f"paramstyle must be one of {_PARAMSTYLES}")
         self.schemas = self._define_construction_schemas()
+
+    def _params(self) -> QueryParams:
+        return QueryParams(self.paramstyle)
 
     def _define_construction_schemas(self) -> Dict[str, Dict]:
         """Define common construction database schemas"""
@@ -207,23 +280,30 @@ class ConstructionQueryBuilder:
         conditions: Optional[List[WhereCondition]] = None,
         order_by: Optional[List[OrderBy]] = None,
         limit: Optional[int] = None,
-        offset: Optional[int] = None
-    ) -> str:
+        offset: Optional[int] = None,
+        group_by: Optional[List[str]] = None
+    ) -> ParameterizedQuery:
         """Build a SELECT query"""
+        params = self._params()
+
         # Format columns
         cols = []
         for col in columns:
             if isinstance(col, str):
-                cols.append(col)
+                cols.append(validate_identifier(col, allow_star=True))
             else:
                 cols.append(col.to_sql())
 
-        query = f"SELECT {', '.join(cols)}\nFROM {table}"
+        query = f"SELECT {', '.join(cols)}\nFROM {validate_identifier(table)}"
 
         # WHERE clause
         if conditions:
-            where_parts = [c.to_sql() for c in conditions]
+            where_parts = [c.to_sql(params) for c in conditions]
             query += f"\nWHERE {' AND '.join(where_parts)}"
+
+        # GROUP BY
+        if group_by:
+            query += f"\nGROUP BY {', '.join(validate_identifier(g) for g in group_by)}"
 
         # ORDER BY
         if order_by:
@@ -231,12 +311,12 @@ class ConstructionQueryBuilder:
             query += f"\nORDER BY {', '.join(order_parts)}"
 
         # LIMIT/OFFSET
-        if limit:
-            query += f"\nLIMIT {limit}"
-        if offset:
-            query += f"\nOFFSET {offset}"
+        if limit is not None:
+            query += f"\nLIMIT {validate_non_negative_int(limit, 'limit')}"
+        if offset is not None:
+            query += f"\nOFFSET {validate_non_negative_int(offset, 'offset')}"
 
-        return query + ";"
+        return ParameterizedQuery(query + ";", params.values)
 
     def select_with_joins(
         self,
@@ -249,11 +329,16 @@ class ConstructionQueryBuilder:
         having: Optional[List[WhereCondition]] = None,
         order_by: Optional[List[OrderBy]] = None,
         limit: Optional[int] = None
-    ) -> str:
+    ) -> ParameterizedQuery:
         """Build a SELECT query with JOINs"""
+        params = self._params()
+
         # Columns
         cols = [col.to_sql() for col in columns]
-        query = f"SELECT {', '.join(cols)}\nFROM {main_table} {main_alias}"
+        query = (
+            f"SELECT {', '.join(cols)}\n"
+            f"FROM {validate_identifier(main_table)} {validate_identifier(main_alias)}"
+        )
 
         # JOINs
         for join in joins:
@@ -261,16 +346,16 @@ class ConstructionQueryBuilder:
 
         # WHERE
         if conditions:
-            where_parts = [c.to_sql() for c in conditions]
+            where_parts = [c.to_sql(params) for c in conditions]
             query += f"\nWHERE {' AND '.join(where_parts)}"
 
         # GROUP BY
         if group_by:
-            query += f"\nGROUP BY {', '.join(group_by)}"
+            query += f"\nGROUP BY {', '.join(validate_identifier(g) for g in group_by)}"
 
         # HAVING
         if having:
-            having_parts = [h.to_sql() for h in having]
+            having_parts = [h.to_sql(params) for h in having]
             query += f"\nHAVING {' AND '.join(having_parts)}"
 
         # ORDER BY
@@ -279,87 +364,80 @@ class ConstructionQueryBuilder:
             query += f"\nORDER BY {', '.join(order_parts)}"
 
         # LIMIT
-        if limit:
-            query += f"\nLIMIT {limit}"
+        if limit is not None:
+            query += f"\nLIMIT {validate_non_negative_int(limit, 'limit')}"
 
-        return query + ";"
+        return ParameterizedQuery(query + ";", params.values)
 
     def insert(
         self,
         table: str,
         data: Dict[str, Any]
-    ) -> str:
+    ) -> ParameterizedQuery:
         """Build an INSERT query"""
-        columns = list(data.keys())
-        values = []
+        params = self._params()
+        columns = [validate_identifier(c) for c in data.keys()]
+        placeholders = [params.add(v) for v in data.values()]
 
-        for v in data.values():
-            if isinstance(v, str):
-                values.append(f"'{v}'")
-            elif isinstance(v, (date, datetime)):
-                values.append(f"'{v.isoformat()}'")
-            elif v is None:
-                values.append("NULL")
-            else:
-                values.append(str(v))
-
-        return f"INSERT INTO {table} ({', '.join(columns)})\nVALUES ({', '.join(values)});"
+        sql = (
+            f"INSERT INTO {validate_identifier(table)} ({', '.join(columns)})\n"
+            f"VALUES ({', '.join(placeholders)});"
+        )
+        return ParameterizedQuery(sql, params.values)
 
     def insert_many(
         self,
         table: str,
         columns: List[str],
         values: List[List[Any]]
-    ) -> str:
+    ) -> ParameterizedQuery:
         """Build a bulk INSERT query"""
+        params = self._params()
+        columns = [validate_identifier(c) for c in columns]
         formatted_values = []
 
         for row in values:
-            row_values = []
-            for v in row:
-                if isinstance(v, str):
-                    row_values.append(f"'{v}'")
-                elif isinstance(v, (date, datetime)):
-                    row_values.append(f"'{v.isoformat()}'")
-                elif v is None:
-                    row_values.append("NULL")
-                else:
-                    row_values.append(str(v))
-            formatted_values.append(f"({', '.join(row_values)})")
+            row = list(row)
+            if len(row) != len(columns):
+                raise ValueError("Each row must have one value per column")
+            formatted_values.append(f"({', '.join(params.add(v) for v in row)})")
 
-        return f"INSERT INTO {table} ({', '.join(columns)})\nVALUES\n{','.join(formatted_values)};"
+        sql = (
+            f"INSERT INTO {validate_identifier(table)} ({', '.join(columns)})\n"
+            f"VALUES\n{','.join(formatted_values)};"
+        )
+        return ParameterizedQuery(sql, params.values)
 
     def update(
         self,
         table: str,
         data: Dict[str, Any],
         conditions: List[WhereCondition]
-    ) -> str:
+    ) -> ParameterizedQuery:
         """Build an UPDATE query"""
-        set_parts = []
+        params = self._params()
+        set_parts = [f"{validate_identifier(col)} = {params.add(val)}" for col, val in data.items()]
+        where_parts = [c.to_sql(params) for c in conditions]
 
-        for col, val in data.items():
-            if isinstance(val, str):
-                set_parts.append(f"{col} = '{val}'")
-            elif isinstance(val, (date, datetime)):
-                set_parts.append(f"{col} = '{val.isoformat()}'")
-            elif val is None:
-                set_parts.append(f"{col} = NULL")
-            else:
-                set_parts.append(f"{col} = {val}")
-
-        where_parts = [c.to_sql() for c in conditions]
-
-        return f"UPDATE {table}\nSET {', '.join(set_parts)}\nWHERE {' AND '.join(where_parts)};"
+        sql = (
+            f"UPDATE {validate_identifier(table)}\n"
+            f"SET {', '.join(set_parts)}\n"
+            f"WHERE {' AND '.join(where_parts)};"
+        )
+        return ParameterizedQuery(sql, params.values)
 
     def delete(
         self,
         table: str,
         conditions: List[WhereCondition]
-    ) -> str:
+    ) -> ParameterizedQuery:
         """Build a DELETE query"""
-        where_parts = [c.to_sql() for c in conditions]
-        return f"DELETE FROM {table}\nWHERE {' AND '.join(where_parts)};"
+        params = self._params()
+        where_parts = [c.to_sql(params) for c in conditions]
+        return ParameterizedQuery(
+            f"DELETE FROM {validate_identifier(table)}\nWHERE {' AND '.join(where_parts)};",
+            params.values,
+        )
 
     # Construction-specific query templates
     def project_cost_summary(self, project_id: int) -> str:
@@ -432,32 +510,36 @@ class ConstructionQueryBuilder:
             order_by=[OrderBy("total_cost", descending=True)]
         )
 
-    def change_order_summary(self, project_id: int) -> str:
+    def change_order_summary(self, project_id: int) -> ParameterizedQuery:
         """Generate change order summary query"""
         return self.select(
             table="change_orders",
             columns=[
+                SelectColumn("status"),
                 SelectColumn("status", aggregate=AggregateFunction.COUNT, alias="count"),
                 SelectColumn("amount", aggregate=AggregateFunction.SUM, alias="total_amount")
             ],
             conditions=[
                 WhereCondition("project_id", ComparisonOperator.EQ, project_id)
-            ]
-        ).replace("SELECT", "SELECT status,")  # Add group by
+            ],
+            group_by=["status"]
+        )
 
-    def cash_flow_projection(self, project_id: int) -> str:
+    def cash_flow_projection(self, project_id: int) -> ParameterizedQuery:
         """Generate cash flow projection query"""
-        return f"""
+        params = self._params()
+        sql = f"""
 SELECT
     DATE_TRUNC('month', invoice_date) AS month,
     SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) AS received,
     SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END) AS pending,
     SUM(amount) AS total
 FROM invoices
-WHERE project_id = {project_id}
+WHERE project_id = {params.add(project_id)}
 GROUP BY DATE_TRUNC('month', invoice_date)
 ORDER BY month;
 """
+        return ParameterizedQuery(sql, params.values)
 
     def material_requirements(self, project_id: int, from_date: date, to_date: date) -> str:
         """Generate material requirements query"""
@@ -483,40 +565,49 @@ ORDER BY month;
             order_by=[OrderBy("earliest_need")]
         )
 
-    def daily_report_summary(self, project_id: int, month: str) -> str:
+    def daily_report_summary(self, project_id: int, month: str) -> ParameterizedQuery:
         """Generate daily report summary for a month"""
-        return f"""
+        params = self._params()
+        sql = f"""
 SELECT
     COUNT(*) AS total_reports,
     AVG(crew_count) AS avg_crew,
     COUNT(CASE WHEN weather = 'Rain' THEN 1 END) AS rain_days,
     COUNT(CASE WHEN weather = 'Clear' THEN 1 END) AS clear_days
 FROM daily_reports
-WHERE project_id = {project_id}
-  AND TO_CHAR(report_date, 'YYYY-MM') = '{month}';
+WHERE project_id = {params.add(project_id)}
+  AND TO_CHAR(report_date, 'YYYY-MM') = {params.add(month)};
 """
+        return ParameterizedQuery(sql, params.values)
 
     def generate_parameterized(
         self,
         query: str,
         params: Dict[str, Any]
-    ) -> tuple:
-        """Convert query to parameterized format"""
-        param_list = []
-        param_query = query
+    ) -> ParameterizedQuery:
+        """Convert a hand-written query with :name placeholders to driver placeholders.
 
-        for key, value in params.items():
-            placeholder = f"${len(param_list) + 1}" if self.dialect == "postgresql" else "?"
-            param_query = param_query.replace(f":{key}", placeholder)
-            param_list.append(value)
+        Each :name is replaced in order of appearance and its value is bound, so
+        values must be passed here rather than formatted into ``query``.
+        """
+        bound = self._params()
+        if bound.paramstyle == "format":
+            query = query.replace("%", "%%")
 
-        return param_query, param_list
+        def substitute(match: "re.Match") -> str:
+            name = match.group(1)
+            if name not in params:
+                raise KeyError(f"No value supplied for :{name}")
+            return bound.add(params[name])
+
+        param_query = re.sub(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)", substitute, query)
+        return ParameterizedQuery(param_query, bound.values)
 
 
 class QueryOptimizer:
     """Optimize SQL queries for construction databases"""
 
-    def suggest_indexes(self, queries: List[str]) -> List[str]:
+    def suggest_indexes(self, queries: List[Union[str, ParameterizedQuery]]) -> List[str]:
         """Suggest indexes based on query patterns"""
         suggestions = []
 
@@ -529,11 +620,15 @@ class QueryOptimizer:
         }
 
         for query in queries:
+            if isinstance(query, tuple):
+                query = query[0]
             query_lower = query.lower()
 
             # Detect table from FROM clause
             if "from " in query_lower:
-                table = query_lower.split("from ")[1].split()[0]
+                table = query_lower.split("from ")[1].split()[0].rstrip(";")
+                if not _IDENTIFIER_PART.fullmatch(table):
+                    continue
 
                 if "project_id" in query_lower:
                     suggestions.append(patterns["project_id"].format(table=table))
@@ -544,8 +639,10 @@ class QueryOptimizer:
 
         return list(set(suggestions))
 
-    def analyze_query(self, query: str) -> Dict:
+    def analyze_query(self, query: Union[str, ParameterizedQuery]) -> Dict:
         """Analyze query for optimization opportunities"""
+        if isinstance(query, tuple):
+            query = query[0]
         analysis = {
             "has_select_star": "*" in query and "SELECT *" in query.upper(),
             "has_indexes_hint": False,
@@ -574,20 +671,27 @@ class QueryOptimizer:
 
 ## Common Use Cases
 
+Builder methods return `(sql, params)`. Always execute them with the driver's
+parameter binding, e.g. `cursor.execute(sql, params)`. Never format `params`
+back into the SQL text: values from spreadsheets, uploads or user requests must
+stay bound parameters. Table, column and alias names must be plain identifiers.
+
 ### Build Cost Summary Query
 
 ```python
-builder = ConstructionQueryBuilder()
+builder = ConstructionQueryBuilder()  # PostgreSQL, %s placeholders (psycopg)
+# ConstructionQueryBuilder(dialect="sqlite")                  -> ? placeholders
+# ConstructionQueryBuilder(paramstyle="numeric_dollar")       -> $1 placeholders (asyncpg)
 
 # Get project cost summary
-query = builder.project_cost_summary(project_id=123)
-print(query)
+sql, params = builder.project_cost_summary(project_id=123)
+cursor.execute(sql, params)
 ```
 
 ### Build Custom SELECT Query
 
 ```python
-query = builder.select(
+sql, params = builder.select(
     table="activities",
     columns=[
         SelectColumn("name"),
@@ -601,12 +705,13 @@ query = builder.select(
     order_by=[OrderBy("percent_complete", descending=True)],
     limit=10
 )
+rows = cursor.execute(sql, params).fetchall()
 ```
 
 ### Build JOIN Query
 
 ```python
-query = builder.select_with_joins(
+sql, params = builder.select_with_joins(
     main_table="invoices",
     main_alias="i",
     columns=[
@@ -621,13 +726,14 @@ query = builder.select_with_joins(
         WhereCondition("status", ComparisonOperator.EQ, "pending", "i")
     ]
 )
+cursor.execute(sql, params)
 ```
 
 ### Insert and Update Data
 
 ```python
 # Insert new cost item
-insert_query = builder.insert(
+sql, params = builder.insert(
     table="cost_items",
     data={
         "project_id": 123,
@@ -637,15 +743,17 @@ insert_query = builder.insert(
         "actual_cost": 0
     }
 )
+cursor.execute(sql, params)
 
 # Update progress
-update_query = builder.update(
+sql, params = builder.update(
     table="activities",
     data={"percent_complete": 75, "status": "In Progress"},
     conditions=[
         WhereCondition("id", ComparisonOperator.EQ, 456)
     ]
 )
+cursor.execute(sql, params)
 ```
 
 ## Quick Reference
@@ -653,6 +761,7 @@ update_query = builder.update(
 | Component | Purpose |
 |-----------|---------|
 | `ConstructionQueryBuilder` | Main query builder |
+| `ParameterizedQuery` | `(sql, params)` result to pass to `cursor.execute` |
 | `WhereCondition` | WHERE clause conditions |
 | `JoinClause` | JOIN definitions |
 | `SelectColumn` | Column with aggregate/alias |
