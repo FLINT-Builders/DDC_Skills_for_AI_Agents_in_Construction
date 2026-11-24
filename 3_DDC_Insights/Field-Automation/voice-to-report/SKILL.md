@@ -177,6 +177,9 @@ progress_schema = {
 
 ## n8n Workflow
 
+Telegram bots are reachable by anyone, so set `APPROVED_TELEGRAM_USER_IDS` to the comma-separated
+Telegram user IDs of approved workers; voice messages from any other sender are dropped before download.
+
 ```json
 {
   "workflow": "Voice to Report",
@@ -185,6 +188,13 @@ progress_schema = {
       "name": "Telegram Trigger",
       "type": "Telegram",
       "event": "voice_message"
+    },
+    {
+      "name": "Approved Sender?",
+      "type": "IF",
+      "condition": "{{ ($env.APPROVED_TELEGRAM_USER_IDS || '').split(',').map(id => id.trim()).includes(String($json.message?.from?.id)) }}",
+      "true": "Download Voice",
+      "false": "No Operation (no download, no transcription, no insert, no reply)"
     },
     {
       "name": "Download Voice",
