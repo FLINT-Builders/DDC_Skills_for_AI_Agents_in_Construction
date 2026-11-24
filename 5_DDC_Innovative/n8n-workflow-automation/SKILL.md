@@ -190,9 +190,13 @@ n8n start
     {
       "name": "Update Database",
       "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.8,
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO model_changes (timestamp, changes) VALUES (NOW(), '{{ JSON.stringify($json) }}')"
+        "query": "INSERT INTO model_changes (timestamp, changes) VALUES (NOW(), $1::jsonb)",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
       }
     },
     {
@@ -392,6 +396,9 @@ Cloud Storage:
    - Store credentials in environment variables
    - Use encryption for sensitive data
    - Implement access controls
+   - Pass model and file data to database nodes through Query Parameters
+     (`$1`, `$2`, ...), never inside quoted SQL literals in the query text
+   - Give the n8n database user only the rights each workflow needs
 ```
 
 ## Quick Reference
