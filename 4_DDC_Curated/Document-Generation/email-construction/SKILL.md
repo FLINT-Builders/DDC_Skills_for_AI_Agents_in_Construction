@@ -399,6 +399,7 @@ Respectfully,
 
 ```python
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -435,9 +436,17 @@ class ConstructionEmailSender:
                                filename=attachment_path.split('/')[-1])
                 msg.attach(part)
 
-        # Send
-        with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-            server.starttls()
+        # Send. The default context verifies the server certificate and
+        # hostname; never pass an unverified context or disable check_hostname,
+        # or the credentials and message go to whoever answers the handshake.
+        context = ssl.create_default_context()
+        if self.smtp_port == 465:
+            server = smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context)
+        else:
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+        with server:
+            if self.smtp_port != 465:
+                server.starttls(context=context)
             server.login(self.username, self.password)
 
             recipients = to + email_data.get('cc', [])
