@@ -1,0 +1,14 @@
+{
+  "name": "n8n-bim-change-sqli-tests",
+  "private": true,
+  "type": "module",
+  "description": "Confirms the BIM Change Detection n8n example interpolates IFC element text into SQL.",
+  "dependencies": {
+    "@n8n/tournament": "1.16.0",
+    "pg": "8.21.0",
+    "pg-promise": "11.9.1"
+  },
+  "overrides": {
+    "pg": "8.21.0"
+  }
+}
