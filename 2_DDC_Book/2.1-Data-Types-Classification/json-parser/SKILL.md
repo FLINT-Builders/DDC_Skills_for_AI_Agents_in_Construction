@@ -13,10 +13,60 @@ Construction systems increasingly use JSON for data exchange - from IoT sensors 
 
 ```python
 import json
+import re
 import pandas as pd
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
+
+
+# Maximum nesting of objects/arrays accepted from a document. Both the
+# standard JSON decoder and the flattener would otherwise walk one stack
+# frame per level, so a deeply nested payload could crash the import.
+MAX_JSON_DEPTH = 32
+
+_JSON_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|[\[\]{}]', re.DOTALL)
+
+
+class JSONDepthError(ValueError):
+    """Raised when a document is nested deeper than MAX_JSON_DEPTH."""
+
+    def __init__(self, max_depth: int = MAX_JSON_DEPTH):
+        super().__init__(f"JSON nesting depth exceeds the maximum of {max_depth}")
+
+
+def check_text_depth(text: Union[str, bytes, bytearray],
+                     max_depth: int = MAX_JSON_DEPTH) -> None:
+    """Refuse raw JSON text nested deeper than max_depth, without decoding it."""
+    if isinstance(text, (bytes, bytearray)):
+        text = text.decode(json.detect_encoding(text), 'surrogatepass')
+    depth = 0
+    for match in _JSON_TOKEN.finditer(text):
+        token = match.group()
+        if token in '[{':
+            depth += 1
+            if depth > max_depth:
+                raise JSONDepthError(max_depth)
+        elif token in ']}':
+            depth -= 1
+
+
+def check_data_depth(data: Any, max_depth: int = MAX_JSON_DEPTH) -> None:
+    """Refuse decoded data nested deeper than max_depth, without recursing."""
+    stack = [(data, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > max_depth:
+            raise JSONDepthError(max_depth)
+        for child in children:
+            if isinstance(child, (dict, list)):
+                stack.append((child, depth + 1))
 
 
 @dataclass
@@ -38,8 +88,12 @@ class ConstructionJSONParser:
         """Parse JSON from file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                text = f.read()
+            check_text_depth(text)
+            data = json.loads(text)
             return JSONParseResult(True, data, [], self._count_records(data))
+        except JSONDepthError as e:
+            return JSONParseResult(False, None, [str(e)], 0)
         except json.JSONDecodeError as e:
             return JSONParseResult(False, None, [f"JSON Error: {e}"], 0)
         except Exception as e:
@@ -48,8 +102,11 @@ class ConstructionJSONParser:
     def parse_string(self, json_string: str) -> JSONParseResult:
         """Parse JSON from string."""
         try:
+            check_text_depth(json_string)
             data = json.loads(json_string)
             return JSONParseResult(True, data, [], self._count_records(data))
+        except JSONDepthError as e:
+            return JSONParseResult(False, None, [str(e)], 0)
         except json.JSONDecodeError as e:
             return JSONParseResult(False, None, [f"JSON Error: {e}"], 0)
 
@@ -63,21 +120,33 @@ class ConstructionJSONParser:
 
     def flatten_json(self, data: Dict, prefix: str = '') -> Dict[str, Any]:
         """Flatten nested JSON to single-level dict."""
+        check_data_depth(data)
         flat = {}
-        for key, value in data.items():
-            new_key = f"{prefix}_{key}" if prefix else key
+        stack = [(prefix, iter(data.items()), False)]
+        while stack:
+            parent, items, in_list = stack[-1]
+            entry = next(items, None)
+            if entry is None:
+                stack.pop()
+                continue
+            key, value = entry
 
+            if in_list:
+                item_key = f"{parent}_{key}"
+                if isinstance(value, dict):
+                    stack.append((item_key, iter(value.items()), False))
+                else:
+                    flat[item_key] = value
+                continue
+
+            new_key = f"{parent}_{key}" if parent else key
             if isinstance(value, dict):
-                flat.update(self.flatten_json(value, new_key))
+                stack.append((new_key, iter(value.items()), False))
             elif isinstance(value, list):
                 if all(isinstance(i, (str, int, float, bool, type(None))) for i in value):
                     flat[new_key] = value
                 else:
-                    for i, item in enumerate(value):
-                        if isinstance(item, dict):
-                            flat.update(self.flatten_json(item, f"{new_key}_{i}"))
-                        else:
-                            flat[f"{new_key}_{i}"] = item
+                    stack.append((new_key, enumerate(value), True))
             else:
                 flat[new_key] = value
         return flat
