@@ -78,6 +78,10 @@ class UnitPriceDatabaseManager:
         'Atlanta': 0.91, 'Miami': 0.95
     }
 
+    # Leading characters that make spreadsheet software evaluate a cell as a formula
+    FORMULA_PREFIXES = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+    CONTROL_PREFIXES = ('\t', '\r', '\n')
+
     def __init__(self, db_path: str = None):
         self.prices: Dict[str, UnitPrice] = {}
         self.price_history: Dict[str, List[UnitPrice]] = {}
@@ -345,22 +349,34 @@ class UnitPriceDatabaseManager:
                 price = self.get_price(code, location)
 
             data.append({
-                'code': price.code,
-                'description': price.description,
-                'unit': price.unit,
+                'code': self._spreadsheet_safe(price.code),
+                'description': self._spreadsheet_safe(price.description),
+                'unit': self._spreadsheet_safe(price.unit),
                 'base_price': float(price.base_price),
                 'labor_cost': float(price.labor_cost),
                 'material_cost': float(price.material_cost),
                 'equipment_cost': float(price.equipment_cost),
-                'location': price.location,
+                'location': self._spreadsheet_safe(price.location),
                 'effective_date': price.effective_date.isoformat(),
-                'source': price.source,
-                'tags': ','.join(price.tags)
+                'source': self._spreadsheet_safe(price.source),
+                'tags': self._spreadsheet_safe(','.join(str(tag) for tag in price.tags))
             })
 
         df = pd.DataFrame(data)
         df.to_csv(file_path, index=False)
         return len(data)
+
+    @classmethod
+    def _spreadsheet_safe(cls, value: Any) -> Any:
+        """Force text that a spreadsheet would run as a formula to be stored as text."""
+        if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+            return value
+        if value is None:
+            return value
+        text = str(value)
+        if text.startswith(cls.CONTROL_PREFIXES) or text.lstrip().startswith(cls.FORMULA_PREFIXES):
+            return "'" + text
+        return text
 
     def validate_prices(self) -> List[Dict]:
         """Validate prices for issues."""
