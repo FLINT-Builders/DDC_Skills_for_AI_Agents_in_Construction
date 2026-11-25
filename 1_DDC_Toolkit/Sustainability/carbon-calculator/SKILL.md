@@ -113,6 +113,30 @@ CARBON_FACTORS = {
 }
 
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe_text(value):
+    """Prefix ' to text a spreadsheet would evaluate as a formula (material names are untrusted)."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in '\t\r\n' or value.lstrip().startswith(FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df whose text cells and headers cannot be read as formulas."""
+    safe = df.copy()
+    safe.columns = range(safe.shape[1])
+    for col in safe.columns:
+        dtype = safe[col].dtype
+        if pd.api.types.is_string_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
+            safe[col] = safe[col].astype(object).map(excel_safe_text)
+    safe.columns = [excel_safe_text(c) for c in df.columns]
+    return safe
+
+
 class CarbonCalculator:
     """Calculate embodied carbon for construction."""
 
@@ -335,7 +359,7 @@ class CarbonCalculator:
                 'Total tCO2e': report['total_tCO2e'],
                 'Materials': report['material_count']
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # Details
             details_df = pd.DataFrame([
@@ -350,20 +374,20 @@ class CarbonCalculator:
                 }
                 for r in self.results
             ])
-            details_df.to_excel(writer, sheet_name='Materials', index=False)
+            excel_safe_frame(details_df).to_excel(writer, sheet_name='Materials', index=False)
 
             # By Category
             cat_df = pd.DataFrame([
                 {'Category': k, 'kgCO2e': v}
                 for k, v in report['by_category'].items()
             ])
-            cat_df.to_excel(writer, sheet_name='By Category', index=False)
+            excel_safe_frame(cat_df).to_excel(writer, sheet_name='By Category', index=False)
 
             # Suggestions
             suggestions = self.suggest_reductions()
             if suggestions:
                 sug_df = pd.DataFrame(suggestions)
-                sug_df.to_excel(writer, sheet_name='Reduction Ideas', index=False)
+                excel_safe_frame(sug_df).to_excel(writer, sheet_name='Reduction Ideas', index=False)
 
         return output_path
 ```
