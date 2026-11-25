@@ -240,7 +240,7 @@ class ChangeOrderManager:
     def approve(self, co_id: str, approver: str, comments: str = ""):
         """Approve change order"""
         co = self.change_orders.get(co_id)
-        if co:
+        if co and co.status in (ChangeOrderStatus.SUBMITTED, ChangeOrderStatus.UNDER_REVIEW):
             co.approvals.append({
                 'approver': approver,
                 'action': 'approved',
