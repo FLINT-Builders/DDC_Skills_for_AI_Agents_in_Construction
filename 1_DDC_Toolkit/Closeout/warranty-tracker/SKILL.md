@@ -34,6 +34,26 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# Spreadsheet apps treat text starting with these as a formula or DDE command.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def excel_safe_text(value: Any) -> Any:
+    """Prefix an apostrophe to text that a spreadsheet would run as a formula."""
+    if isinstance(value, str) and (value[:1] in FORMULA_PREFIXES
+                                   or value.lstrip()[:1] in FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df with every text cell neutralized for Excel export."""
+    safe = df.copy()
+    for column in safe.columns:
+        safe[column] = safe[column].map(excel_safe_text)
+    return safe
+
+
 class WarrantyType(Enum):
     """Types of warranties."""
     MANUFACTURER = "manufacturer"
@@ -356,12 +376,17 @@ class WarrantyTracker:
         return pd.DataFrame(data)
 
     def export_to_excel(self, output_path: str):
-        """Export all warranty data to Excel."""
+        """Export all warranty data to Excel.
+
+        Warranty and claim text comes from contractors and manufacturers, so
+        every sheet goes through excel_safe_frame before it is written.
+        """
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Warranties
             warranties_df = pd.DataFrame([w.to_dict() for w in self.warranties.values()])
             if not warranties_df.empty:
-                warranties_df.to_excel(writer, sheet_name='Warranties', index=False)
+                excel_safe_frame(warranties_df).to_excel(
+                    writer, sheet_name='Warranties', index=False)
 
             # Claims
             claims_data = []
@@ -379,12 +404,14 @@ class WarrantyTracker:
                 })
 
             if claims_data:
-                pd.DataFrame(claims_data).to_excel(writer, sheet_name='Claims', index=False)
+                excel_safe_frame(pd.DataFrame(claims_data)).to_excel(
+                    writer, sheet_name='Claims', index=False)
 
             # Expiring soon
             expiring = self.generate_expiration_report(6)
             if not expiring.empty:
-                expiring.to_excel(writer, sheet_name='Expiring Soon', index=False)
+                excel_safe_frame(expiring).to_excel(
+                    writer, sheet_name='Expiring Soon', index=False)
 
         return output_path
 ```
