@@ -37,3 +37,4 @@ When the user asks about CWICR database:
 - Filesystem permission required for BIM model reading and Excel export
 - subprocess.run() is used solely for invoking the DDC RvtExporter CAD conversion tool
 - All API keys must be loaded from environment variables, never hardcoded
+- BIM type names and CWICR fields are untrusted: before writing any text cell to Excel, prefix values starting with =, +, -, @, tab or carriage return with an apostrophe so they are never evaluated as formulas

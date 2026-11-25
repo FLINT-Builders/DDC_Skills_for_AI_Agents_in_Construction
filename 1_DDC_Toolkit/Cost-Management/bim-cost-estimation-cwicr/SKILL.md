@@ -109,6 +109,25 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 import json
 
+# Spreadsheet apps evaluate text cells that start with these as formulas.
+# BIM type names and CWICR payload strings are untrusted input.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def excel_safe(value):
+    """Prefix formula-like text with an apostrophe so it is stored as text."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Copy of frame with every value, index label and header made excel_safe."""
+    safe = frame.apply(lambda column: column.map(excel_safe))
+    safe.index = safe.index.map(excel_safe)
+    safe.columns = safe.columns.map(excel_safe)
+    return safe
+
 @dataclass
 class WorkItem:
     """Matched work item from CWICR"""
@@ -402,7 +421,8 @@ Example: ["Brick masonry laying", "Cement mortar for brick joints", "Internal ce
         # Summary by trade
         by_trade = df.groupby('Trade')['Total'].sum().sort_values(ascending=False)
 
-        # Write Excel
+        # Write Excel. Every sheet goes through excel_safe_frame so text from
+        # the model or the price database is never written as a formula.
         excel_path = f"{output_path}/{project_name}_Estimate.xlsx"
         with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
             # Summary sheet
@@ -410,13 +430,15 @@ Example: ["Brick masonry laying", "Cement mortar for brick joints", "Internal ce
                 'Metric': ['Total Cost', 'Labor Cost', 'Material Cost', 'Equipment Cost'],
                 'Value': [total_cost, total_labor, total_material, total_equipment]
             }
-            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(pd.DataFrame(summary_data)).to_excel(
+                writer, sheet_name='Summary', index=False
+            )
 
             # By Trade
-            by_trade.to_frame().to_excel(writer, sheet_name='By Trade')
+            excel_safe_frame(by_trade.to_frame()).to_excel(writer, sheet_name='By Trade')
 
             # Detail
-            df.to_excel(writer, sheet_name='Detail', index=False)
+            excel_safe_frame(df).to_excel(writer, sheet_name='Detail', index=False)
 
         return {
             'excel_path': excel_path,
