@@ -441,16 +441,52 @@ class ActivityWeatherAnalyzer:
         """Add custom activity"""
         self.activities[activity.activity_id] = activity
 
+    @staticmethod
+    def _normalize_activity_type(value: str) -> str:
+        return '_'.join(value.strip().lower().replace('-', ' ').split())
+
+    def resolve_activity(self, activity_type: str) -> ConstructionActivity:
+        """Resolve an activity type (key or name, any case/spacing) to its template.
+
+        Unknown or ambiguous types raise ValueError. There is deliberately no
+        default template: falling back to one (especially an indoor one) would
+        score weather-sensitive work as unaffected by the forecast.
+        """
+        if not isinstance(activity_type, str) or not activity_type.strip():
+            raise ValueError(
+                f"Missing activity type {activity_type!r}; cannot analyze weather impact"
+            )
+
+        if activity_type in self.activities:
+            return self.activities[activity_type]
+
+        wanted = self._normalize_activity_type(activity_type)
+        matches = {
+            id(act): act for key, act in self.activities.items()
+            if self._normalize_activity_type(key) == wanted
+        }
+        if not matches:
+            matches = {
+                id(act): act for act in self.activities.values()
+                if self._normalize_activity_type(act.activity_name) == wanted
+            }
+
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+
+        problem = "Ambiguous" if matches else "Unknown"
+        raise ValueError(
+            f"{problem} activity type {activity_type!r}; expected one of: "
+            f"{', '.join(sorted(self.activities))}"
+        )
+
     def analyze_day(self, weather: DailyForecast,
                    activities: List[str]) -> Dict[str, Dict]:
         """Analyze weather impact for specific day and activities"""
         results = {}
 
         for activity_id in activities:
-            activity = self.activities.get(activity_id)
-            if not activity:
-                continue
-
+            activity = self.resolve_activity(activity_id)
             impact = self._calculate_impact(weather, activity)
             results[activity_id] = impact
 
@@ -521,9 +557,7 @@ class ActivityWeatherAnalyzer:
                          activity_id: str,
                          min_productivity: float = 0.8) -> List[date]:
         """Find optimal days for an activity"""
-        activity = self.activities.get(activity_id)
-        if not activity:
-            return []
+        activity = self.resolve_activity(activity_id)
 
         optimal = []
         for day in forecast:
@@ -545,7 +579,7 @@ import pandas as pd
 class ScheduledActivity:
     activity_id: str
     activity_name: str
-    activity_type: str  # Maps to ACTIVITY_TEMPLATES
+    activity_type: str  # ACTIVITY_TEMPLATES key or name; unknown types raise ValueError
     planned_start: date
     planned_end: date
     duration_days: int
@@ -562,6 +596,7 @@ class ScheduleWeatherOptimizer:
     def analyze_schedule(self, schedule: List[ScheduledActivity],
                         location: Tuple[float, float]) -> Dict:
         """Analyze schedule against weather forecast"""
+        templates = [self.analyzer.resolve_activity(a.activity_type) for a in schedule]
         forecast = self.weather.get_forecast(location[0], location[1])
         forecast_dict = {f.date: f for f in forecast}
 
@@ -572,9 +607,9 @@ class ScheduleWeatherOptimizer:
             'recommendations': []
         }
 
-        for activity in schedule:
+        for activity, template in zip(schedule, templates):
             activity_analysis = self._analyze_activity(
-                activity, forecast_dict
+                activity, template, forecast_dict
             )
             analysis['activities'].append(activity_analysis)
 
@@ -593,6 +628,7 @@ class ScheduleWeatherOptimizer:
         return analysis
 
     def _analyze_activity(self, activity: ScheduledActivity,
+                         template: ConstructionActivity,
                          forecast: Dict[date, DailyForecast]) -> Dict:
         """Analyze single activity against weather"""
         result = {
@@ -613,11 +649,7 @@ class ScheduleWeatherOptimizer:
         while current_date <= activity.planned_end:
             if current_date in forecast:
                 weather = forecast[current_date]
-                impact = self.analyzer._calculate_impact(
-                    weather,
-                    self.analyzer.activities.get(activity.activity_type,
-                        self.analyzer.ACTIVITY_TEMPLATES.get('interior_work'))
-                )
+                impact = self.analyzer._calculate_impact(weather, template)
 
                 productivities.append(impact['productivity'])
 
@@ -650,6 +682,7 @@ class ScheduleWeatherOptimizer:
                           location: Tuple[float, float],
                           flexibility_days: int = 7) -> Optional[date]:
         """Suggest better start date for activity"""
+        act_template = self.analyzer.resolve_activity(activity.activity_type)
         forecast = self.weather.get_forecast(location[0], location[1])
 
         best_start = None
@@ -662,10 +695,8 @@ class ScheduleWeatherOptimizer:
             productivities = []
             for f in forecast:
                 if test_start <= f.date <= test_end:
-                    act_template = self.analyzer.activities.get(activity.activity_type)
-                    if act_template:
-                        impact = self.analyzer._calculate_impact(f, act_template)
-                        productivities.append(impact['productivity'])
+                    impact = self.analyzer._calculate_impact(f, act_template)
+                    productivities.append(impact['productivity'])
 
             if productivities:
                 avg = sum(productivities) / len(productivities)
