@@ -150,6 +150,16 @@ def split_drawing_package(pdf_path: str, output_dir: str) -> list:
 # Example: Process RFI and add to tracking spreadsheet
 import pandas as pd
 
+# RFI PDFs come from outside parties. A cell starting with one of these is
+# run as a formula by Excel (or by a CSV import of the log).
+FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+def as_log_text(value):
+    """Keep extracted text a literal string in the log, never a formula."""
+    if isinstance(value, str) and value.lstrip(" ").startswith(FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
 # Extract RFI data
 rfi_data = extract_rfi_data("RFI_045.pdf")
 
@@ -160,14 +170,15 @@ tracker = pd.read_excel("RFI_Log.xlsx")
 new_row = pd.DataFrame([rfi_data])
 tracker = pd.concat([tracker, new_row], ignore_index=True)
 
-# Save updated tracker
-tracker.to_excel("RFI_Log.xlsx", index=False)
+# Save updated tracker; existing rows are re-written too, so neutralize all of them
+tracker = tracker.apply(lambda column: column.map(as_log_text))
+tracker.to_excel("RFI_Log.xlsx", index=False, engine="openpyxl")
 ```
 
 ## Dependencies
 
 ```bash
-pip install pypdf pdfplumber reportlab
+pip install pypdf pdfplumber reportlab pandas openpyxl
 ```
 
 ## Resources
