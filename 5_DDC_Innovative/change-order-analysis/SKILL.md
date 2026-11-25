@@ -419,6 +419,30 @@ from collections import defaultdict
 from typing import List, Dict
 import pandas as pd
 
+# Spreadsheet apps evaluate text starting with these characters as a formula
+# (fullwidth variants are normalized to ASCII by some of them).
+_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+_CONTROL_TRIGGERS = ('\t', '\r', '\n')
+
+def excel_safe(value):
+    """Return value with formula-leading text prefixed by an apostrophe."""
+    if isinstance(value, str) and (
+        value.startswith(_CONTROL_TRIGGERS)
+        or value.lstrip().startswith(_FORMULA_TRIGGERS)
+    ):
+        return "'" + value
+    return value
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df with every text cell, index label and header neutralized."""
+    safe = df.copy()
+    for col in safe.columns:
+        if not pd.api.types.is_numeric_dtype(safe[col]):
+            safe[col] = safe[col].map(excel_safe)
+    safe.index = safe.index.map(excel_safe)
+    safe.columns = safe.columns.map(excel_safe)
+    return safe
+
 class ChangeOrderAnalyzer:
     """Analyze patterns in change orders"""
 
@@ -544,6 +568,8 @@ class ChangeOrderAnalyzer:
 
     def generate_report(self, output_path: str) -> str:
         """Generate comprehensive analysis report"""
+        # Change order fields such as initiated_by come from submitters, so
+        # every sheet goes through excel_safe_frame before it is written.
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
             summary = pd.DataFrame([{
@@ -552,20 +578,20 @@ class ChangeOrderAnalyzer:
                 'Total Schedule Impact (days)': self.df['schedule_days'].sum(),
                 'Risk Score': self.calculate_risk_score()
             }])
-            summary.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(summary).to_excel(writer, sheet_name='Summary', index=False)
 
             # By type
-            pd.DataFrame(self.analyze_by_type()).T.to_excel(
+            excel_safe_frame(pd.DataFrame(self.analyze_by_type()).T).to_excel(
                 writer, sheet_name='By_Type'
             )
 
             # Root causes
-            pd.DataFrame(self.identify_root_causes()).to_excel(
+            excel_safe_frame(pd.DataFrame(self.identify_root_causes())).to_excel(
                 writer, sheet_name='Root_Causes', index=False
             )
 
             # All COs
-            self.df.to_excel(writer, sheet_name='All_COs', index=False)
+            excel_safe_frame(self.df).to_excel(writer, sheet_name='All_COs', index=False)
 
         return output_path
 ```
