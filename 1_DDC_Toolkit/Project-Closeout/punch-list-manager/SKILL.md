@@ -28,6 +28,33 @@ from datetime import date, timedelta
 from enum import Enum
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "{")
+
+
+def excel_safe(value):
+    """Keep untrusted text from being stored or opened as a spreadsheet formula."""
+    if not isinstance(value, str):
+        return value
+    lead = value.lstrip()[:1]
+    if lead not in _FORMULA_PREFIXES:
+        return value
+    if lead in ("+", "-"):
+        try:
+            float(value)
+            return value
+        except ValueError:
+            pass
+    return "'" + value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe to every cell; call on every DataFrame before to_excel."""
+    safe = df.copy()
+    for column in safe.columns:
+        safe[column] = safe[column].map(excel_safe)
+    return safe
+
+
 class PunchItemStatus(Enum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
@@ -332,7 +359,7 @@ class PunchListManager:
                 'Completion %': summary.completion_rate,
                 'Overdue': summary.overdue_count
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # All items
             items_df = pd.DataFrame([
@@ -352,7 +379,7 @@ class PunchListManager:
                 }
                 for i in self.items.values()
             ])
-            items_df.to_excel(writer, sheet_name='All Items', index=False)
+            excel_safe_frame(items_df).to_excel(writer, sheet_name='All Items', index=False)
 
             # By Assignee
             assignee_df = pd.DataFrame([
@@ -360,7 +387,7 @@ class PunchListManager:
                 for k, v in summary.by_assignee.items()
             ])
             if not assignee_df.empty:
-                assignee_df.to_excel(writer, sheet_name='By Assignee', index=False)
+                excel_safe_frame(assignee_df).to_excel(writer, sheet_name='By Assignee', index=False)
 
             # Overdue
             overdue = self.get_overdue_items()
@@ -376,7 +403,7 @@ class PunchListManager:
                     }
                     for i in overdue
                 ])
-                overdue_df.to_excel(writer, sheet_name='Overdue', index=False)
+                excel_safe_frame(overdue_df).to_excel(writer, sheet_name='Overdue', index=False)
 
         return output_path
 ```
