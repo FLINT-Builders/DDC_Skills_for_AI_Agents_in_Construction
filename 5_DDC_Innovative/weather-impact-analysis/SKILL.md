@@ -541,6 +541,20 @@ from datetime import date, timedelta
 from typing import List, Dict
 import pandas as pd
 
+# Spreadsheet apps treat text starting with these characters as a formula.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+def excel_safe(value):
+    """Return value so a spreadsheet stores it as literal text, never a formula."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+def write_sheet(writer, rows: List[Dict], sheet_name: str):
+    """Write rows to a sheet with every string cell neutralized."""
+    safe_rows = [{key: excel_safe(value) for key, value in row.items()} for row in rows]
+    pd.DataFrame(safe_rows).to_excel(writer, sheet_name=sheet_name, index=False)
+
 @dataclass
 class ScheduledActivity:
     activity_id: str
@@ -685,13 +699,12 @@ class ScheduleWeatherOptimizer:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
-            summary = pd.DataFrame([{
+            write_sheet(writer, [{
                 'Total Activities': len(schedule),
                 'Weather Delay Days': analysis['weather_delays'],
                 'High Risk Days': len(analysis['risk_days']),
                 'Recommendations': len(analysis['recommendations'])
-            }])
-            summary.to_excel(writer, sheet_name='Summary', index=False)
+            }], 'Summary')
 
             # Activity details
             activity_data = []
@@ -703,13 +716,11 @@ class ScheduleWeatherOptimizer:
                     'Avg Productivity': f"{act['avg_productivity']:.0%}",
                     'Expected Delay': f"{act['expected_delay']} days"
                 })
-            pd.DataFrame(activity_data).to_excel(writer, sheet_name='Activities', index=False)
+            write_sheet(writer, activity_data, 'Activities')
 
             # Risk days
             if analysis['risk_days']:
-                pd.DataFrame(analysis['risk_days']).to_excel(
-                    writer, sheet_name='Risk_Days', index=False
-                )
+                write_sheet(writer, analysis['risk_days'], 'Risk_Days')
 
         return output_path
 ```
