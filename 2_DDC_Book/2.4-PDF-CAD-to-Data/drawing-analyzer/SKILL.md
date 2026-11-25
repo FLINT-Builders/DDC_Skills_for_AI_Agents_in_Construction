@@ -77,12 +77,15 @@ class DrawingAnalysisResult:
 class DrawingAnalyzer:
     """Analyze construction drawings for data extraction."""
 
-    # Common dimension patterns
+    # Common dimension patterns.
+    # Page text is untrusted: every quantifier is bounded and (?<![\d.]) stops a
+    # match from starting inside a longer number, so a long digit run cannot
+    # trigger quadratic backtracking.
     DIMENSION_PATTERNS = [
-        r"(\d+'-\s*\d+(?:\s*\d+/\d+)?\"?)",  # Feet-inches: 10'-6", 10' - 6 1/2"
-        r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|ft|in)",  # Metric/imperial with unit
-        r"(\d+'-\d+\")",  # Compact feet-inches
-        r"(\d+)\s*(?:SF|LF|CY|EA)",  # Quantity dimensions
+        r"(?<![\d.])(\d{1,4}'-\s{0,3}\d{1,2}(?:\s{0,3}\d{1,2}/\d{1,2})?\"?)",  # Feet-inches: 10'-6", 10' - 6 1/2"
+        r"(?<![\d.])(\d{1,6}(?:\.\d{1,4})?)\s{0,3}(?:mm|cm|m|ft|in)",  # Metric/imperial with unit
+        r"(?<![\d.])(\d{1,4}'-\d{1,2}\")",  # Compact feet-inches
+        r"(?<![\d.])(\d{1,7})\s{0,3}(?:SF|LF|CY|EA)",  # Quantity dimensions
     ]
 
     # Common annotation patterns
@@ -97,8 +100,8 @@ class DrawingAnalyzer:
 
     # Scale patterns
     SCALE_PATTERNS = [
-        r"SCALE:\s*(\d+(?:/\d+)?)\s*[\"']\s*=\s*(\d+)\s*['\-]",  # 1/4" = 1'-0"
-        r"(\d+):(\d+)",  # 1:100
+        r"SCALE:\s{0,5}(\d{1,3}(?:/\d{1,3})?)\s{0,3}[\"']\s{0,3}=\s{0,3}(\d{1,3})\s{0,3}['\-]",  # 1/4" = 1'-0"
+        r"(?<![\d.])(\d{1,6}):(\d{1,6})(?!\d)",  # 1:100
         r"NTS|NOT TO SCALE",
     ]
 
@@ -327,17 +330,22 @@ class DrawingAnalyzer:
                     return self._parse_imperial_scale(match.group(0))
                 else:
                     # Metric: 1:100
-                    return 1 / float(match.group(2))
+                    denominator = float(match.group(2))
+                    if denominator == 0:
+                        continue
+                    return 1 / denominator
 
         return 1.0  # Default
 
     def _parse_imperial_scale(self, scale_text: str) -> float:
         """Parse imperial scale to factor."""
-        match = re.search(r'(\d+)(?:/(\d+))?\s*["\']?\s*=\s*(\d+)', scale_text)
+        match = re.search(r'(?<!\d)(\d{1,3})(?:/(\d{1,3}))?\s{0,3}["\']?\s{0,3}=\s{0,3}(\d{1,3})', scale_text)
         if match:
             numerator = float(match.group(1))
             denominator = float(match.group(2)) if match.group(2) else 1
             feet = float(match.group(3))
+            if denominator == 0 or feet == 0:
+                return 1.0
             inches_per_foot = (numerator / denominator)
             return inches_per_foot / (feet * 12)
         return 1.0
