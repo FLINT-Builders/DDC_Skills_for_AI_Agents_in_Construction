@@ -113,6 +113,17 @@ from datetime import datetime
 import numpy as np
 from pathlib import Path
 import json
+import os
+import re
+import secrets
+
+def validate_flight_id(flight_id: str) -> str:
+    """Reject flight ids that are not a plain, safe file name component"""
+    # Flight ids become file names, so they must be a single path component.
+    if (not isinstance(flight_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", flight_id)):
+        raise ValueError(f"Invalid flight id: {flight_id!r}")
+    return flight_id
 
 @dataclass
 class CameraParameters:
@@ -172,8 +183,9 @@ class DroneDataProcessor:
                       generate_dem: bool = True,
                       generate_pointcloud: bool = True) -> ProcessingResult:
         """Process drone survey data"""
+        flight_id = validate_flight_id(flight.flight_id)
         result = ProcessingResult()
-        result.statistics['flight_id'] = flight.flight_id
+        result.statistics['flight_id'] = flight_id
         result.statistics['image_count'] = len(flight.images)
         result.statistics['gsd_cm'] = flight.gsd
         result.statistics['flight_date'] = flight.date.isoformat()
@@ -182,22 +194,66 @@ class DroneDataProcessor:
         # like OpenDroneMap, Pix4D API, or custom SfM pipeline
 
         if generate_ortho:
-            result.orthomosaic_path = str(self.output_dir / f"{flight.flight_id}_ortho.tif")
+            result.orthomosaic_path = str(self.output_dir / f"{flight_id}_ortho.tif")
             result.statistics['ortho_resolution'] = flight.gsd
 
         if generate_dem:
-            result.dem_path = str(self.output_dir / f"{flight.flight_id}_dem.tif")
-            result.dsm_path = str(self.output_dir / f"{flight.flight_id}_dsm.tif")
+            result.dem_path = str(self.output_dir / f"{flight_id}_dem.tif")
+            result.dsm_path = str(self.output_dir / f"{flight_id}_dsm.tif")
 
         if generate_pointcloud:
-            result.point_cloud_path = str(self.output_dir / f"{flight.flight_id}_pointcloud.las")
+            result.point_cloud_path = str(self.output_dir / f"{flight_id}_pointcloud.las")
 
         # Generate report
-        result.report_path = str(self.output_dir / f"{flight.flight_id}_report.json")
-        with open(result.report_path, 'w') as f:
-            json.dump(result.statistics, f, indent=2)
+        result.report_path = str(
+            self._write_json(f"{flight_id}_report.json", result.statistics)
+        )
 
         return result
+
+    def _write_json(self, filename: str, data: Dict) -> Path:
+        """Write JSON to a new file directly inside the output directory.
+
+        The data goes to a freshly created temp file that is then renamed over
+        the target, so a symlink or hard link already at the target name is
+        replaced rather than written through.
+        """
+        payload = json.dumps(data, indent=2).encode('utf-8')
+        tmp_name = f".{filename}.{secrets.token_hex(8)}.tmp"
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
+
+        if {os.open, os.rename, os.unlink} <= os.supports_dir_fd:
+            dir_fd = os.open(self.output_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                fd = os.open(tmp_name, flags, 0o666, dir_fd=dir_fd)
+                try:
+                    with os.fdopen(fd, 'wb') as f:
+                        f.write(payload)
+                    os.rename(tmp_name, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name, dir_fd=dir_fd)
+                    except FileNotFoundError:
+                        pass
+                    raise
+            finally:
+                os.close(dir_fd)
+        else:
+            tmp_path = self.output_dir / tmp_name
+            fd = os.open(tmp_path, flags, 0o666)
+            try:
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(payload)
+                os.replace(tmp_path, self.output_dir / filename)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except FileNotFoundError:
+                    pass
+                raise
+
+        return self.output_dir / filename
 
     def extract_point_cloud(self, las_path: str) -> PointCloud:
         """Extract point cloud from LAS file"""
