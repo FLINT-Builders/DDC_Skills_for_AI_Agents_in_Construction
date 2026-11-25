@@ -20,6 +20,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# Spreadsheet apps treat text starting with these characters as a formula.
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _excel_text(value: Any) -> Any:
+    """Return value so a spreadsheet stores it as text, never as a formula."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 class PhotoCategory(Enum):
     PROGRESS = "progress"
     QUALITY = "quality"
@@ -114,7 +125,9 @@ class ProgressPhotoAnalyzer:
             'By': p.captured_by,
             'Tags': ', '.join(p.tags)
         } for p in self.photos.values()]
-        pd.DataFrame(data).to_excel(output_path, index=False)
+        safe_data = [{key: _excel_text(value) for key, value in row.items()}
+                     for row in data]
+        pd.DataFrame(safe_data).to_excel(output_path, index=False)
 ```
 
 ## Quick Start
