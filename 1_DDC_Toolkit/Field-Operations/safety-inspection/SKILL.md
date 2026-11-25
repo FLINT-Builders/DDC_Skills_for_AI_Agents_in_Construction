@@ -151,6 +151,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 import json
 import os
+import uuid
 
 class SafetyManager:
     """Construction site safety management system"""
@@ -164,6 +165,10 @@ class SafetyManager:
 
         # Load checklists
         self.checklists = self._load_checklists()
+
+    @staticmethod
+    def _new_id(prefix: str) -> str:
+        return f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
 
     def _load_checklists(self) -> Dict[str, List[dict]]:
         """Load inspection checklists"""
@@ -222,7 +227,7 @@ class SafetyManager:
     ) -> Inspection:
         """Create new inspection"""
 
-        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        inspection_id = self._new_id("INS")
 
         # Get checklist for this type
         checklist = self.checklists.get(inspection_type.value, [])
@@ -242,7 +247,9 @@ class SafetyManager:
             weather=weather
         )
 
-        self.inspections[inspection_id] = inspection
+        # Never replace an existing record under the same id.
+        if self.inspections.setdefault(inspection_id, inspection) is not inspection:
+            raise ValueError(f"Inspection {inspection_id} already exists")
         return inspection
 
     def complete_checklist_item(
@@ -284,7 +291,7 @@ class SafetyManager:
     ) -> Hazard:
         """Record a hazard finding"""
 
-        hazard_id = f"HAZ-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        hazard_id = self._new_id("HAZ")
 
         if due_date is None:
             # Default due dates by severity
@@ -308,7 +315,8 @@ class SafetyManager:
             photo_urls=photo_urls or []
         )
 
-        self.hazards[hazard_id] = hazard
+        if self.hazards.setdefault(hazard_id, hazard) is not hazard:
+            raise ValueError(f"Hazard {hazard_id} already exists")
 
         # Add to inspection
         if inspection_id in self.inspections:
@@ -376,7 +384,7 @@ class SafetyManager:
     ) -> Incident:
         """Report safety incident"""
 
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        incident_id = self._new_id("INC")
 
         incident = Incident(
             incident_id=incident_id,
@@ -392,7 +400,8 @@ class SafetyManager:
             photos=photo_urls or []
         )
 
-        self.incidents[incident_id] = incident
+        if self.incidents.setdefault(incident_id, incident) is not incident:
+            raise ValueError(f"Incident {incident_id} already exists")
 
         # Immediate notification for all incidents
         self._notify_incident(incident)
