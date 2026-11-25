@@ -144,11 +144,13 @@ class ContractClauseExtractor:
         ],
     }
 
-    # Key terms to extract
+    # Key terms to extract. Digit runs are only matched from the start of the
+    # run: retrying from every digit of a long run that never reaches the
+    # required suffix takes time quadratic in the run length.
     KEY_TERM_PATTERNS = {
-        "dollar_amounts": r'\$[\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*\s*dollars',
-        "percentages": r'\d+(?:\.\d+)?%',
-        "time_periods": r'\d+\s*(?:days?|weeks?|months?|years?|business\s+days?|calendar\s+days?)',
+        "dollar_amounts": r'\$[\d,]+(?:\.\d{2})?|(?<!\d)(?<!\d,)\d+(?:,\d{3})*\s*dollars',
+        "percentages": r'(?<!\d)\d+(?:\.\d+)?%',
+        "time_periods": r'(?<!\d)\d+\s*(?:days?|weeks?|months?|years?|business\s+days?|calendar\s+days?)',
         "notice_periods": r'(?:within|not\s+(?:less|more)\s+than)\s+\d+\s*(?:days?|hours?)',
     }
 
@@ -342,11 +344,16 @@ class ContractClauseExtractor:
         """Extract contract parties."""
         parties = {}
 
+        # Party names are capped at 120 characters so a label with no
+        # terminator cannot make each match attempt scan the rest of the text.
+        # In the parenthetical forms a longer name ends on a non-space
+        # character, so the whitespace before the "(" is scanned once per
+        # attempt rather than once per character of the name.
         patterns = [
-            (r"Owner[:\s]+([A-Z][A-Za-z\s,\.]+?)(?:\n|,\s*(?:a|an))", "owner"),
-            (r"Contractor[:\s]+([A-Z][A-Za-z\s,\.]+?)(?:\n|,\s*(?:a|an))", "contractor"),
-            (r"between\s+([A-Z][A-Za-z\s,\.]+?)\s+\(\"Owner\"\)", "owner"),
-            (r"and\s+([A-Z][A-Za-z\s,\.]+?)\s+\(\"Contractor\"\)", "contractor"),
+            (r"Owner[:\s]+([A-Z][A-Za-z\s,\.]{1,119}?)(?:\n|,\s*(?:a|an))", "owner"),
+            (r"Contractor[:\s]+([A-Z][A-Za-z\s,\.]{1,119}?)(?:\n|,\s*(?:a|an))", "contractor"),
+            (r"between\s+([A-Z](?:[A-Za-z\s,\.]{0,118}?[A-Za-z,\.]|\s))\s+\(\"Owner\"\)", "owner"),
+            (r"and\s+([A-Z](?:[A-Za-z\s,\.]{0,118}?[A-Za-z,\.]|\s))\s+\(\"Contractor\"\)", "contractor"),
         ]
 
         for pattern, party_type in patterns:
@@ -361,7 +368,7 @@ class ContractClauseExtractor:
         patterns = [
             r"contract\s+(?:sum|price|amount)[:\s]+\$?([\d,]+(?:\.\d{2})?)",
             r"total\s+(?:contract|price)[:\s]+\$?([\d,]+(?:\.\d{2})?)",
-            r"\$?([\d,]+(?:\.\d{2})?)\s+(?:dollars\s+)?(?:and\s+no/100)",
+            r"(?<![\d,])\$?([\d,]+(?:\.\d{2})?)\s+(?:dollars\s+)?(?:and\s+no/100)",
         ]
 
         for pattern in patterns:
