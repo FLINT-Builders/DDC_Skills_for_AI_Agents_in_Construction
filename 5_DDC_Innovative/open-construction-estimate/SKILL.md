@@ -243,6 +243,21 @@ class WorkItemMatcher:
 ### Automated Estimator
 
 ```python
+def store_formulas_as_text(workbook) -> None:
+    """Keep cell text literal: openpyxl writes any string starting with '=' as a formula.
+
+    Element and price-book text comes from outside parties, and this export
+    writes no formulas of its own, so every formula cell is data.
+    """
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.value = str(cell.value)
+                    cell.data_type = 's'
+                    cell.quotePrefix = True
+
+
 class OpenConstructionEstimator:
     """Generate cost estimates using open databases"""
 
@@ -357,6 +372,8 @@ class OpenConstructionEstimator:
                 # By type
                 by_type = df.groupby('element_type')['total_cost'].sum()
                 by_type.to_excel(writer, sheet_name='By_Type')
+
+            store_formulas_as_text(writer.book)
 
         return output_path
 
