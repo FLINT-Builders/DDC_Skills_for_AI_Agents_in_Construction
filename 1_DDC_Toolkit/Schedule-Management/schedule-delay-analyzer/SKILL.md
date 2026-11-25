@@ -118,8 +118,20 @@ class ScheduleDelayAnalyzer:
             by_cause[cause] = by_cause.get(cause, 0) + delay.delay_days
         return by_cause
 
-    def calculate_time_extension_claim(self) -> Dict[str, Any]:
-        """Calculate basis for time extension claim."""
+    @staticmethod
+    def _delay_day_set(delays: List[DelayEvent]) -> set:
+        """Calendar days covered by the delays; overlapping days count once."""
+        days = set()
+        for d in delays:
+            days.update(range(d.start_date.toordinal(), d.end_date.toordinal()))
+        return days
+
+    def calculate_time_extension_claim(self, actual_completion: Optional[date] = None) -> Dict[str, Any]:
+        """Calculate basis for time extension claim.
+
+        When actual_completion is given, the extension and compensable days
+        are capped at the actual overrun past contract completion.
+        """
         excusable = [d for d in self.delays.values()
                     if d.delay_type in [DelayType.EXCUSABLE_COMPENSABLE,
                                         DelayType.EXCUSABLE_NON_COMPENSABLE]
@@ -128,13 +140,20 @@ class ScheduleDelayAnalyzer:
         compensable = [d for d in excusable
                       if d.delay_type == DelayType.EXCUSABLE_COMPENSABLE]
 
+        excusable_days = len(self._delay_day_set(excusable))
+        compensable_days = len(self._delay_day_set(compensable))
+        if actual_completion is not None:
+            overrun = max(0, (actual_completion - self.contract_completion).days)
+            excusable_days = min(excusable_days, overrun)
+            compensable_days = min(compensable_days, overrun)
+
         return {
             'excusable_delays': len(excusable),
-            'excusable_days': sum(d.delay_days for d in excusable),
+            'excusable_days': excusable_days,
             'compensable_delays': len(compensable),
-            'compensable_days': sum(d.delay_days for d in compensable),
+            'compensable_days': compensable_days,
             'total_cost_impact': sum(d.cost_impact for d in compensable),
-            'recommended_extension': sum(d.delay_days for d in excusable)
+            'recommended_extension': excusable_days
         }
 
     def get_summary(self) -> Dict[str, Any]:
