@@ -188,9 +188,10 @@ class SensorDataAggregator:
 
         self.readings.append(reading)
 
-        # Check thresholds
-        if quality == DataQuality.GOOD:
-            self._check_thresholds(sensor, reading)
+        # Safety limits are checked for every stored reading: a sudden spike
+        # past a threshold is exactly the event alerts exist for, so the
+        # quality label must never suppress the alert.
+        self._check_thresholds(sensor, reading)
 
         return reading
 
@@ -224,7 +225,7 @@ class SensorDataAggregator:
         recent = self.get_recent_readings(sensor.id, minutes=5)
         if len(recent) >= 3:
             avg = statistics.mean([r.value for r in recent])
-            if abs(value - avg) > avg * 0.5:  # 50% deviation
+            if abs(value - avg) > abs(avg) * 0.5:  # 50% deviation
                 return DataQuality.SUSPECT
 
         return DataQuality.GOOD
@@ -242,6 +243,9 @@ class SensorDataAggregator:
                      severity: AlertSeverity):
         """Create and dispatch alert."""
         threshold = sensor.thresholds.get(severity.value, 0)
+        message = f"{sensor.name}: {reading.value} {reading.unit} exceeds {severity.value} threshold ({threshold})"
+        if reading.quality != DataQuality.GOOD:
+            message += f" [reading quality: {reading.quality.value}, verify sensor]"
 
         alert = Alert(
             id=f"ALERT-{len(self.alerts)+1:06d}",
@@ -251,7 +255,7 @@ class SensorDataAggregator:
             timestamp=reading.timestamp,
             value=reading.value,
             threshold=threshold,
-            message=f"{sensor.name}: {reading.value} {reading.unit} exceeds {severity.value} threshold ({threshold})"
+            message=message
         )
 
         self.alerts.append(alert)
