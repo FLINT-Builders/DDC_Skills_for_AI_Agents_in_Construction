@@ -21,11 +21,35 @@ Automated daily progress report generation from structured site data inputs.
 ## Technical Implementation
 
 ```python
+import numbers
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
+
+
+# Leading characters that make spreadsheet applications treat a cell as a formula.
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Return value in a form a spreadsheet stores as data, never as a formula."""
+    if value is None or isinstance(value, (bool, numbers.Number, date, timedelta)):
+        return value
+    # pandas writes every other type as str(value), so neutralize that text.
+    text = str(value)
+    if text.startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
+def _safe_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build a DataFrame for Excel export with every cell neutralized."""
+    return pd.DataFrame([
+        {column: _excel_safe(value) for column, value in row.items()}
+        for row in rows
+    ])
 
 
 class WeatherCondition(Enum):
@@ -227,7 +251,7 @@ class DailyProgressReporter:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Header
-            header_df = pd.DataFrame([{
+            header_df = _safe_frame([{
                 'Project': report.project_name,
                 'Project #': report.project_number,
                 'Date': report.report_date,
@@ -240,7 +264,7 @@ class DailyProgressReporter:
 
             # Work Activities
             if report.work_activities:
-                activities_df = pd.DataFrame([
+                activities_df = _safe_frame([
                     {
                         'Activity ID': a.activity_id,
                         'Description': a.description,
@@ -259,7 +283,7 @@ class DailyProgressReporter:
 
             # Labor
             if report.labor:
-                labor_df = pd.DataFrame([
+                labor_df = _safe_frame([
                     {
                         'Trade': l.trade,
                         'Company': l.company,
@@ -274,7 +298,7 @@ class DailyProgressReporter:
 
             # Equipment
             if report.equipment:
-                equip_df = pd.DataFrame([
+                equip_df = _safe_frame([
                     {
                         'Type': e.equipment_type,
                         'ID': e.equipment_id,
