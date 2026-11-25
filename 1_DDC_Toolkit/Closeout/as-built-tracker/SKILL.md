@@ -28,6 +28,24 @@ from datetime import date, timedelta
 from enum import Enum
 
 
+# Leading characters that make Excel, LibreOffice or Sheets treat a cell as a
+# formula (including full-width variants some locales accept).
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Store contractor-supplied text as literal text, never as a formula."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in ('\t', '\r', '\n') or value.lstrip().startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _excel_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame([{k: _excel_safe(v) for k, v in row.items()} for row in rows])
+
+
 class DocumentStatus(Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
@@ -327,7 +345,7 @@ class AsBuiltTracker:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
-            summary_df = pd.DataFrame([{
+            summary_df = _excel_frame([{
                 'Project': self.project_name,
                 'Handover Date': self.handover_date,
                 'Total Documents': summary['total_documents'],
@@ -339,7 +357,7 @@ class AsBuiltTracker:
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
             # All Documents
-            docs_df = pd.DataFrame([
+            docs_df = _excel_frame([
                 {
                     'ID': d.document_id,
                     'Number': d.document_number,
@@ -360,14 +378,14 @@ class AsBuiltTracker:
             # Overdue
             overdue = self.get_overdue_documents()
             if overdue:
-                overdue_df = pd.DataFrame(overdue)
+                overdue_df = _excel_frame(overdue)
                 overdue_df.to_excel(writer, sheet_name='Overdue', index=False)
 
             # By Contractor
             contractors = set(d.contractor for d in self.documents.values())
             contractor_data = [self.get_contractor_status(c) for c in contractors]
             if contractor_data:
-                contractor_df = pd.DataFrame(contractor_data)
+                contractor_df = _excel_frame(contractor_data)
                 contractor_df.to_excel(writer, sheet_name='By Contractor', index=False)
 
         return output_path
