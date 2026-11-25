@@ -142,12 +142,19 @@ class AsBuiltTracker:
                           revision: str,
                           submitted_by: str,
                           file_path: str = "") -> Optional[DocumentSubmission]:
-        """Record document submission."""
+        """Record document submission.
 
-        if document_id not in self.documents:
+        Returns None when the document is unknown or already approved. An
+        approved document must be reopened (reviewed as not approved) before a
+        new revision can be submitted.
+        """
+
+        doc = self.documents.get(document_id)
+        if doc is None:
             return None
 
-        doc = self.documents[document_id]
+        if doc.status == DocumentStatus.APPROVED:
+            return None
 
         submission = DocumentSubmission(
             submission_id=f"SUB-{len(self.submissions)+1:04d}",
@@ -164,7 +171,9 @@ class AsBuiltTracker:
         # Update document
         doc.status = DocumentStatus.SUBMITTED
         doc.current_revision = revision
+        doc.file_path = file_path
         doc.submitted_date = date.today()
+        doc.approved_date = None
 
         return submission
 
@@ -172,19 +181,28 @@ class AsBuiltTracker:
                           document_id: str,
                           approved: bool,
                           reviewer: str,
-                          comments: str = ""):
-        """Review submitted document."""
+                          comments: str = "",
+                          revision: Optional[str] = None) -> bool:
+        """Review submitted document.
 
-        if document_id not in self.documents:
-            return
+        Pass the revision that was reviewed; the review is refused if the
+        document's current revision has changed since. Reviewing an approved
+        document as not approved reopens it for resubmission.
+        """
 
-        doc = self.documents[document_id]
+        doc = self.documents.get(document_id)
+        if doc is None:
+            return False
+
+        if revision is not None and revision != doc.current_revision:
+            return False
 
         if approved:
             doc.status = DocumentStatus.APPROVED
             doc.approved_date = date.today()
         else:
             doc.status = DocumentStatus.REJECTED
+            doc.approved_date = None
 
         doc.reviewer = reviewer
         doc.comments = comments
@@ -195,6 +213,8 @@ class AsBuiltTracker:
                 sub.status = DocumentStatus.APPROVED if approved else DocumentStatus.REJECTED
                 sub.review_comments = comments
                 break
+
+        return True
 
     def get_summary(self) -> Dict[str, Any]:
         """Get documentation status summary."""
@@ -402,7 +422,12 @@ tracker.add_document(
 tracker.record_submission("DOC-0001", revision="A", submitted_by="John Smith")
 
 # Review
-tracker.review_submission("DOC-0001", approved=True, reviewer="PM", comments="Approved")
+tracker.review_submission("DOC-0001", approved=True, reviewer="PM", comments="Approved", revision="A")
+
+# An approved document must be reopened before a new revision is accepted
+tracker.record_submission("DOC-0001", revision="B", submitted_by="John Smith")  # -> None
+tracker.review_submission("DOC-0001", approved=False, reviewer="PM", comments="Reopened for field changes")
+tracker.record_submission("DOC-0001", revision="B", submitted_by="John Smith")
 ```
 
 ## Common Use Cases
