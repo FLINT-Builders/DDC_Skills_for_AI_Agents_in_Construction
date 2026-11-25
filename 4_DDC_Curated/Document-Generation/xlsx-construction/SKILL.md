@@ -10,6 +10,20 @@ metadata: {"openclaw": {"emoji": "📄", "os": ["win32"], "homepage": "https://d
 
 Adapted from Anthropic's XLSX skill for construction spreadsheet workflows.
 
+## Writing Untrusted Text
+
+openpyxl stores any string that starts with `=` as a formula, and Excel evaluates it when the workbook is opened. Pass every value that comes from a BIM export, a user, or another system through `safe_cell_text` before it is written to a cell or to a DataFrame passed to `to_excel`.
+
+```python
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+def safe_cell_text(value):
+    """Return value so that spreadsheets keep it as text, never as a formula."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+```
+
 ## Construction Use Cases
 
 ### 1. Cost Estimate Template
@@ -118,20 +132,21 @@ def create_schedule_tracker(output_path: str, tasks: list):
 
     # Add tasks with formulas
     for i, task in enumerate(tasks, 2):
-        ws.cell(row=i, column=1, value=task.get('id', i-1))
-        ws.cell(row=i, column=2, value=task.get('name', ''))
-        ws.cell(row=i, column=3, value=task.get('start', ''))
-        ws.cell(row=i, column=4, value=task.get('end', ''))
+        ws.cell(row=i, column=1, value=safe_cell_text(task.get('id', i-1)))
+        ws.cell(row=i, column=2, value=safe_cell_text(task.get('name', '')))
+        ws.cell(row=i, column=3, value=safe_cell_text(task.get('start', '')))
+        ws.cell(row=i, column=4, value=safe_cell_text(task.get('end', '')))
 
         # Duration formula
         ws.cell(row=i, column=5, value=f"=D{i}-C{i}")
 
         # Progress bar (0-100%)
-        ws.cell(row=i, column=6, value=task.get('progress', 0))
+        ws.cell(row=i, column=6, value=safe_cell_text(task.get('progress', 0)))
         ws.cell(row=i, column=6).number_format = '0%'
 
         # Status with validation
-        status_cell = ws.cell(row=i, column=7, value=task.get('status', 'Not Started'))
+        status_cell = ws.cell(row=i, column=7,
+                              value=safe_cell_text(task.get('status', 'Not Started')))
         status_dv.add(status_cell)
 
     wb.save(output_path)
@@ -185,6 +200,10 @@ def process_qto_from_bim(bim_xlsx: str, output_path: str):
     # Read BIM export
     df = pd.read_excel(bim_xlsx)
 
+    # Measures must be numbers; text in these columns is dropped, not summed
+    for col in ['Volume', 'Area', 'Length']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # Group by category and type
     qto = df.groupby(['Category', 'Type']).agg({
         'Volume': 'sum',
@@ -192,6 +211,10 @@ def process_qto_from_bim(bim_xlsx: str, output_path: str):
         'Length': 'sum',
         'Count': 'count'
     }).reset_index()
+
+    # Category and Type names come from the BIM file
+    for col in ['Category', 'Type']:
+        qto[col] = qto[col].map(safe_cell_text)
 
     # Rename columns for clarity
     qto.columns = ['Category', 'Type', 'Total Volume (m³)',
