@@ -27,6 +27,24 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def store_cells_as_text(workbook) -> None:
+    """Keep every exported string literal so spreadsheet apps never evaluate it.
+
+    openpyxl turns any string starting with '=' into a formula, and project,
+    material code, and material names are free text from the caller.
+    """
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+                if cell.data_type == 's' and str(cell.value).startswith(FORMULA_TRIGGERS):
+                    cell.quotePrefix = True
+
+
 class MaterialCategory(Enum):
     CONCRETE = "concrete"
     STEEL = "steel"
@@ -364,6 +382,8 @@ class CarbonCalculator:
             if suggestions:
                 sug_df = pd.DataFrame(suggestions)
                 sug_df.to_excel(writer, sheet_name='Reduction Ideas', index=False)
+
+            store_cells_as_text(writer.book)
 
         return output_path
 ```

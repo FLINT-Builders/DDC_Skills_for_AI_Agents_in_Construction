@@ -16,6 +16,24 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def store_cells_as_text(workbook) -> None:
+    """Keep every exported string literal so spreadsheet apps never evaluate it.
+
+    openpyxl turns any string starting with '=' into a formula, and custom
+    emission descriptions and stage labels are free text from the caller.
+    """
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+                if cell.data_type == 's' and str(cell.value).startswith(FORMULA_TRIGGERS):
+                    cell.quotePrefix = True
+
+
 class EmissionScope(Enum):
     SCOPE_1 = "scope_1"  # Direct emissions
     SCOPE_2 = "scope_2"  # Indirect from energy
@@ -160,7 +178,9 @@ class CarbonFootprintTracker:
             'kg CO2e': round(e.total_kgco2, 2),
             'Stage': e.lifecycle_stage
         } for e in self.entries]
-        pd.DataFrame(data).to_excel(output_path, index=False)
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            pd.DataFrame(data).to_excel(writer, index=False)
+            store_cells_as_text(writer.book)
 ```
 
 ## Quick Start
