@@ -288,10 +288,32 @@ class LODValidator:
     }
 
     def __init__(self, model, target_lod='LOD300'):
+        if target_lod not in self.LOD_REQUIREMENTS:
+            # An unknown target would have no requirements and pass every element
+            raise ValueError(
+                f"Unknown target LOD {target_lod!r}; expected one of "
+                f"{sorted(self.LOD_REQUIREMENTS)}"
+            )
         self.model = model
         self.target_lod = target_lod
-        self.requirements = self.LOD_REQUIREMENTS.get(target_lod, {})
+        self.requirements = self.LOD_REQUIREMENTS[target_lod]
         self.results = []
+
+    @staticmethod
+    def _is_missing(value):
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    def _required_quantities(self):
+        required = self.requirements.get('quantities', [])
+        if required == ['All']:
+            # 'All' must at least cover every quantity a lower LOD names
+            union = []
+            for spec in self.LOD_REQUIREMENTS.values():
+                for qty in spec.get('quantities', []):
+                    if qty != 'All' and qty not in union:
+                        union.append(qty)
+            return union
+        return required
 
     def validate_element(self, element):
         """Validate single element against LOD requirements"""
@@ -315,7 +337,7 @@ class LODValidator:
             all_props.update(props)
 
         for prop in required_props:
-            if prop not in all_props or all_props[prop] is None:
+            if prop not in all_props or self._is_missing(all_props[prop]):
                 issues.append({
                     'element': element_guid,
                     'issue': f'Missing property: {prop}',
@@ -323,16 +345,14 @@ class LODValidator:
                 })
 
         # Check quantities
-        required_quantities = self.requirements.get('quantities', [])
-        if required_quantities != ['All']:
-            qsets = psets.get('BaseQuantities', {})
-            for qty in required_quantities:
-                if qty not in qsets:
-                    issues.append({
-                        'element': element_guid,
-                        'issue': f'Missing quantity: {qty}',
-                        'required_for': self.target_lod
-                    })
+        qsets = psets.get('BaseQuantities', {})
+        for qty in self._required_quantities():
+            if qty not in qsets or self._is_missing(qsets[qty]):
+                issues.append({
+                    'element': element_guid,
+                    'issue': f'Missing quantity: {qty}',
+                    'required_for': self.target_lod
+                })
 
         return issues
 
@@ -532,6 +552,10 @@ class BIMValidationPipeline:
         if bim_report['warnings'] > self.config['warn_threshold']:
             return False
 
+        # Optional config key; any LOD issue fails the model unless raised
+        if lod_report['total_issues'] > self.config.get('lod_issue_threshold', 0):
+            return False
+
         return True
 
     def run_batch(self, ifc_paths):
@@ -565,13 +589,16 @@ class BIMValidationPipeline:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
             summary = pd.DataFrame({
-                'Metric': ['File', 'Timestamp', 'Passed', 'Errors', 'Warnings'],
+                'Metric': ['File', 'Timestamp', 'Passed', 'Errors', 'Warnings',
+                           'LOD Target', 'LOD Issues'],
                 'Value': [
                     latest['file'],
                     latest['timestamp'],
                     latest['passed'],
                     latest['bim_validation']['errors'],
-                    latest['bim_validation']['warnings']
+                    latest['bim_validation']['warnings'],
+                    latest['lod_validation']['target_lod'],
+                    latest['lod_validation']['total_issues']
                 ]
             })
             summary.to_excel(writer, sheet_name='Summary', index=False)
@@ -589,6 +616,18 @@ class BIMValidationPipeline:
                     for i in latest['bim_validation']['issues']
                 ])
                 issues_df.to_excel(writer, sheet_name='Issues', index=False)
+
+            # LOD issues
+            if latest['lod_validation']['issues']:
+                lod_df = pd.DataFrame([
+                    {
+                        'Element': i['element'],
+                        'Issue': i['issue'],
+                        'Required For': i['required_for']
+                    }
+                    for i in latest['lod_validation']['issues']
+                ])
+                lod_df.to_excel(writer, sheet_name='LOD Issues', index=False)
 
         return output_path
 ```
