@@ -165,20 +165,23 @@ class CriticalPathAnalyzer:
         visited = set()
         result = []
 
-        def visit(activity_id: str):
-            if activity_id in visited:
-                return
-            visited.add(activity_id)
-
-            activity = self.activities.get(activity_id)
-            if activity:
-                for pred in activity.predecessors:
-                    if pred in self.activities:
-                        visit(pred)
-                result.append(activity_id)
-
-        for activity_id in self.activities:
-            visit(activity_id)
+        # Iterative depth-first walk so long predecessor chains cannot
+        # exhaust the call stack.
+        for root_id in self.activities:
+            if root_id in visited:
+                continue
+            visited.add(root_id)
+            stack = [(root_id, iter(self.activities[root_id].predecessors))]
+            while stack:
+                activity_id, preds = stack[-1]
+                for pred in preds:
+                    if pred in self.activities and pred not in visited:
+                        visited.add(pred)
+                        stack.append((pred, iter(self.activities[pred].predecessors)))
+                        break
+                else:
+                    stack.pop()
+                    result.append(activity_id)
 
         return result
 

@@ -141,24 +141,38 @@ class ScheduleCompressor:
 
     def calculate_project_duration(self) -> int:
         """Calculate current project duration using CPM."""
-        # Simple forward pass
+        # Simple forward pass. The walk is iterative so a dependency cycle is
+        # reported instead of exhausting the stack.
         finish_times = {}
 
-        def get_finish(act_id: str) -> int:
-            if act_id in finish_times:
-                return finish_times[act_id]
-
-            act = self.activities[act_id]
-            if not act.predecessors:
-                start = 0
-            else:
-                start = max(get_finish(p) for p in act.predecessors)
-
-            finish_times[act_id] = start + act.current_duration
-            return finish_times[act_id]
-
-        for act_id in self.activities:
-            get_finish(act_id)
+        for root_id in self.activities:
+            if root_id in finish_times:
+                continue
+            path = [root_id]
+            on_path = {root_id}
+            pending = [iter(self.activities[root_id].predecessors)]
+            while pending:
+                for pred_id in pending[-1]:
+                    if pred_id in on_path:
+                        cycle = path[path.index(pred_id):] + [pred_id]
+                        raise ValueError(
+                            "Dependency cycle detected: "
+                            + " -> ".join(str(a) for a in cycle)
+                        )
+                    if pred_id not in finish_times:
+                        path.append(pred_id)
+                        on_path.add(pred_id)
+                        pending.append(iter(self.activities[pred_id].predecessors))
+                        break
+                else:
+                    pending.pop()
+                    act_id = path.pop()
+                    on_path.discard(act_id)
+                    act = self.activities[act_id]
+                    start = max(
+                        (finish_times[p] for p in act.predecessors), default=0
+                    )
+                    finish_times[act_id] = start + act.current_duration
 
         self.project_duration = max(finish_times.values()) if finish_times else 0
         return self.project_duration
