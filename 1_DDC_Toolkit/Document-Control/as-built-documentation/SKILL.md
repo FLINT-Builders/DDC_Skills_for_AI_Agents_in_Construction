@@ -139,14 +139,19 @@ class AsBuiltDocumentManager:
                     break
 
     def upload_as_built(self, doc_id: str, file_path: str, new_revision: str = None):
-        if doc_id not in self.documents:
+        doc = self.documents.get(doc_id)
+        if doc is None:
             return
-        doc = self.documents[doc_id]
+        if doc.status not in (DocumentStatus.DRAFT, DocumentStatus.UNDER_REVIEW):
+            raise ValueError(
+                f"{doc_id} is {doc.status.value}; a verified as-built cannot be replaced")
         doc.as_built_file = file_path
         doc.last_updated = date.today()
         if new_revision:
             doc.revision = new_revision
         doc.status = DocumentStatus.UNDER_REVIEW
+        doc.verified_by = ""
+        doc.verified_date = None
 
     def verify_document(self, doc_id: str, verified_by: str):
         if doc_id not in self.documents:

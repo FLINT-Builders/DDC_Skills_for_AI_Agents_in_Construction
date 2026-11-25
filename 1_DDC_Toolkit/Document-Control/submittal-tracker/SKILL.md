@@ -90,10 +90,17 @@ class SubmittalTracker:
         return submittal
 
     def submit(self, sub_id: str, files: List[str]):
-        if sub_id in self.submittals:
-            self.submittals[sub_id].status = SubmittalStatus.SUBMITTED
-            self.submittals[sub_id].submitted_date = date.today()
-            self.submittals[sub_id].files = files
+        sub = self.submittals.get(sub_id)
+        if sub is None:
+            return
+        if sub.status != SubmittalStatus.DRAFT:
+            raise ValueError(
+                f"{sub_id} is {sub.status.value}; only a draft can be submitted")
+        new_files = list(files)
+        sub.status = SubmittalStatus.SUBMITTED
+        sub.submitted_date = date.today()
+        sub.approved_date = None
+        sub.files = new_files
 
     def review(self, sub_id: str, status: SubmittalStatus, reviewer: str, comment: str = ""):
         if sub_id in self.submittals:
@@ -105,12 +112,20 @@ class SubmittalTracker:
                 sub.approved_date = date.today()
 
     def resubmit(self, sub_id: str, files: List[str]):
-        if sub_id in self.submittals:
-            sub = self.submittals[sub_id]
-            sub.revision += 1
-            sub.status = SubmittalStatus.SUBMITTED
-            sub.submitted_date = date.today()
-            sub.files = files
+        sub = self.submittals.get(sub_id)
+        if sub is None:
+            return
+        # Approved packages are closed; only a reviewer's revise/reject reopens one.
+        if sub.status not in (SubmittalStatus.REVISE_RESUBMIT, SubmittalStatus.REJECTED):
+            raise ValueError(
+                f"{sub_id} is {sub.status.value}; only revise_resubmit or "
+                f"rejected submittals can be resubmitted")
+        new_files = list(files)
+        sub.revision += 1
+        sub.status = SubmittalStatus.SUBMITTED
+        sub.submitted_date = date.today()
+        sub.approved_date = None
+        sub.files = new_files
 
     def get_pending(self) -> List[Submittal]:
         return [s for s in self.submittals.values()
