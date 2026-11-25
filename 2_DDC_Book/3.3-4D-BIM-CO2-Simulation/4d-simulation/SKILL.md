@@ -477,26 +477,41 @@ class SequenceAnalyzer:
             if row['ElementId'] in graph:
                 graph[row['ElementId']]['duration'] = (row['End_Date'] - row['Start_Date']).days
 
-        # Find longest path (simplified critical path)
-        def longest_path(node, memo={}):
-            if node in memo:
-                return memo[node]
-
-            if not graph[node]['predecessors']:
-                return graph[node]['duration']
-
-            max_pred = max(
-                longest_path(pred, memo) for pred in graph[node]['predecessors']
-            )
-            memo[node] = max_pred + graph[node]['duration']
-            return memo[node]
-
-        # Get all path lengths
-        path_lengths = {elem: longest_path(elem) for elem in graph.keys()}
+        # Find longest path (simplified critical path). The walk is iterative
+        # so a dependency cycle is reported instead of exhausting the stack.
+        path_lengths = {}
+        for root in graph:
+            if root in path_lengths:
+                continue
+            path = [root]
+            on_path = {root}
+            pending = [iter(graph[root]['predecessors'])]
+            while pending:
+                for pred in pending[-1]:
+                    if pred in on_path:
+                        cycle = path[path.index(pred):] + [pred]
+                        raise ValueError(
+                            "Dependency cycle detected: "
+                            + " -> ".join(str(elem) for elem in cycle)
+                        )
+                    if pred not in path_lengths:
+                        path.append(pred)
+                        on_path.add(pred)
+                        pending.append(iter(graph[pred]['predecessors']))
+                        break
+                else:
+                    pending.pop()
+                    node = path.pop()
+                    on_path.discard(node)
+                    max_pred = max(
+                        (path_lengths[pred] for pred in graph[node]['predecessors']),
+                        default=0
+                    )
+                    path_lengths[node] = max_pred + graph[node]['duration']
 
         # Critical path elements
         max_length = max(path_lengths.values())
-        critical = [elem for elem, length in path_lengths.items() if length == max_length]
+        critical = [elem for elem in graph if path_lengths[elem] == max_length]
 
         return critical
 ```
