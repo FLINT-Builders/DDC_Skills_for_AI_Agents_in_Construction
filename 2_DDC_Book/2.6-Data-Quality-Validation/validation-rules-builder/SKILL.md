@@ -21,11 +21,34 @@ Rule-based validation engine using RegEx and logic rules to ensure data quality 
 ## Technical Implementation
 
 ```python
+import math
 import re
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import date
+
+
+def is_missing(value: Any) -> bool:
+    """True for None, "", [], and NaN-like markers (float/numpy NaN, NaT, pandas NA).
+
+    pandas turns blank Excel/CSV cells into NaN, which is truthy and not equal
+    to "" or None, so it must be checked explicitly.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, list):
+        return len(value) == 0
+    try:
+        return bool(value != value)
+    except (TypeError, ArithmeticError):
+        # pandas NA has no truth value; Decimal('sNaN') refuses to compare
+        return True
+    except ValueError:
+        # array-like values have no single truth value and are not a missing marker
+        return False
 
 
 class RuleType(Enum):
@@ -250,7 +273,7 @@ class ValidationRulesBuilder:
         """Apply single validation rule."""
 
         if rule.rule_type == RuleType.REQUIRED:
-            is_valid = value is not None and value != "" and value != []
+            is_valid = not is_missing(value)
             return ValidationResult(
                 field=rule.field,
                 is_valid=is_valid,
@@ -259,8 +282,8 @@ class ValidationRulesBuilder:
                 value=value
             )
 
-        # Skip other validations if value is None/empty
-        if value is None or value == "":
+        # Only an explicit None/"" skips the remaining rules; NaN must still fail RANGE
+        if value is None or (isinstance(value, str) and value == ""):
             return ValidationResult(
                 field=rule.field,
                 is_valid=True,
@@ -275,12 +298,13 @@ class ValidationRulesBuilder:
         elif rule.rule_type == RuleType.RANGE:
             try:
                 num_value = float(value)
-                is_valid = True
+                # NaN fails every comparison, and float() accepts "nan"/"inf" strings
+                is_valid = math.isfinite(num_value)
                 if rule.min_value is not None and num_value < rule.min_value:
                     is_valid = False
                 if rule.max_value is not None and num_value > rule.max_value:
                     is_valid = False
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 is_valid = False
 
         elif rule.rule_type == RuleType.ENUM:
@@ -336,6 +360,8 @@ class ConstructionValidators:
             .add_required_rule("code_required", "cost_code")
             .add_required_rule("desc_required", "description")
             .use_pattern("code_format", "cost_code", "cost_code")
+            .add_required_rule("quantity_required", "quantity")
+            .add_required_rule("unit_cost_required", "unit_cost")
             .add_range_rule("quantity_positive", "quantity", min_value=0)
             .add_range_rule("unit_cost_positive", "unit_cost", min_value=0)
             .add_enum_rule("unit_valid", "unit", ["EA", "LF", "SF", "CY", "TON", "HR", "LS"])
@@ -356,6 +382,8 @@ class ConstructionValidators:
             .add_required_rule("id_required", "activity_id")
             .add_required_rule("name_required", "activity_name")
             .use_pattern("id_format", "activity_id", "activity_id")
+            .add_required_rule("duration_required", "duration")
+            .add_required_rule("progress_required", "percent_complete")
             .add_range_rule("duration_positive", "duration", min_value=0)
             .add_range_rule("progress_range", "percent_complete", min_value=0, max_value=100)
         )
