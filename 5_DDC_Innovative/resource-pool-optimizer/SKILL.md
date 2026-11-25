@@ -202,15 +202,22 @@ class ResourcePoolOptimizer:
         if not resource:
             return 0
 
-        # Find overlapping allocations
-        allocated = 0
-        for alloc in self.allocations.values():
-            if alloc.resource_id != resource_id:
-                continue
+        overlapping = [
+            alloc for alloc in self.allocations.values()
+            if alloc.resource_id == resource_id
+            and alloc.start_date < end and alloc.end_date > start
+        ]
 
-            # Check overlap
-            if alloc.start_date < end and alloc.end_date > start:
-                allocated = max(allocated, alloc.quantity)
+        # Concurrent bookings stack, so take the peak summed load in the window.
+        # Load only rises at an allocation start, so checking `start` and each
+        # overlapping start inside the window finds the peak.
+        instants = {start} | {a.start_date for a in overlapping if a.start_date > start}
+        allocated = max(
+            (sum(a.quantity for a in overlapping
+                 if a.start_date <= t < a.end_date)
+             for t in instants),
+            default=0
+        )
 
         return resource.capacity - allocated
 
@@ -227,6 +234,12 @@ class ResourcePoolOptimizer:
 
         if quantity is None:
             quantity = min(request.quantity_needed, resource.capacity)
+
+        # A non-positive quantity or empty window would lower the summed load.
+        if not quantity > 0:
+            raise ValueError(f"Quantity must be positive, got {quantity}")
+        if not request.start_date < request.end_date:
+            raise ValueError(f"Request {request_id} has an empty or reversed window")
 
         # Check availability
         available = self._get_availability(
