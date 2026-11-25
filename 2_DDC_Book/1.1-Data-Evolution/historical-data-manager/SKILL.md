@@ -171,15 +171,32 @@ class HistoricalDataManager:
                 for item in record.extracted_data:
                     if 'amount' in item or 'cost' in item:
                         original_cost = item.get('amount') or item.get('cost', 0)
-                        normalized_item = item.copy()
+                        normalized_item = {
+                            self._sanitize_cell(k): self._sanitize_cell(v)
+                            for k, v in item.items()
+                        }
                         normalized_item['original_cost'] = original_cost
                         normalized_item['normalized_cost'] = original_cost * escalation_factor
                         normalized_item['escalation_factor'] = escalation_factor
                         normalized_item['original_year'] = record.year
-                        normalized_item['project_id'] = record.project_id
+                        normalized_item['project_id'] = self._sanitize_cell(record.project_id)
                         normalized_data.append(normalized_item)
 
         return pd.DataFrame(normalized_data)
+
+    # Spreadsheet writers (openpyxl, xlsxwriter) store strings starting with
+    # these as formulas; Excel/LibreOffice also evaluate them on CSV import.
+    _FORMULA_PREFIXES = ('=', '+', '-', '@', '{', '\t', '\r', '\n')
+
+    @classmethod
+    def _sanitize_cell(cls, value: Any) -> Any:
+        """Neutralize archive text that a spreadsheet would run as a formula."""
+        if isinstance(value, str) and (
+            value.startswith(cls._FORMULA_PREFIXES)
+            or value.lstrip().startswith(cls._FORMULA_PREFIXES)
+        ):
+            return "'" + value
+        return value
 
     def _detect_data_type(self, df: pd.DataFrame) -> str:
         """Detect type of data from column names and content."""
