@@ -18,8 +18,20 @@ Validate incoming construction data before processing to catch errors early. Dom
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Callable, Optional
 from enum import Enum
+import math
+import numbers
 import re
 from datetime import datetime
+
+def is_finite_number(value: Any) -> bool:
+    """True for real, finite numbers. NaN and +/-inf compare False against
+    every bound, so range checks must reject them before comparing."""
+    if not isinstance(value, numbers.Real) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 class ValidationSeverity(Enum):
     ERROR = "error"      # Must fix, blocks processing
@@ -118,13 +130,17 @@ class CostEstimateValidator:
                 result.add_error(field, f"Required field '{field}' is missing")
 
     def _validate_line_items(self, items: list, result: ValidationResult):
+        labels = {'quantity': 'Quantity', 'unit_cost': 'Unit cost'}
         for i, item in enumerate(items):
-            # Check for negative values
-            if item.get('quantity', 0) < 0:
-                result.add_error(f"line_items[{i}].quantity", "Quantity cannot be negative", item.get('quantity'))
-
-            if item.get('unit_cost', 0) < 0:
-                result.add_error(f"line_items[{i}].unit_cost", "Unit cost cannot be negative", item.get('unit_cost'))
+            # Check for non-finite and negative values
+            numeric_ok = True
+            for key, label in labels.items():
+                value = item.get(key, 0)
+                if not is_finite_number(value):
+                    result.add_error(f"line_items[{i}].{key}", f"{label} must be a finite number", value)
+                    numeric_ok = False
+                elif value < 0:
+                    result.add_error(f"line_items[{i}].{key}", f"{label} cannot be negative", value)
 
             # Check for missing descriptions
             if not item.get('description'):
@@ -135,33 +151,60 @@ class CostEstimateValidator:
                 if not re.match(r'^\d{2}\s?\d{2}\s?\d{2}$', item['csi_code']):
                     result.add_warning(f"line_items[{i}].csi_code", f"Invalid CSI code format: {item['csi_code']}", suggestion="Use format: XX XX XX")
 
-            # Check for zero amounts
+            if not numeric_ok:
+                continue
+
+            # Check for zero and overflowing amounts
             amount = item.get('quantity', 0) * item.get('unit_cost', 0)
-            if amount == 0:
+            if not is_finite_number(amount):
+                result.add_error(f"line_items[{i}]", "Line item amount is not a finite number", amount)
+            elif amount == 0:
                 result.add_warning(f"line_items[{i}]", "Line item has zero amount")
 
     def _validate_totals(self, data: dict, result: ValidationResult):
         if 'line_items' not in data or 'total' not in data:
             return
 
-        calculated = sum(
-            item.get('quantity', 0) * item.get('unit_cost', 0)
-            for item in data['line_items']
-        )
-
         declared = data['total']
+        if not is_finite_number(declared):
+            result.add_error("total", "Declared total must be a finite number", declared)
+            return
+
+        calculated = 0
+        for item in data['line_items']:
+            quantity = item.get('quantity', 0)
+            unit_cost = item.get('unit_cost', 0)
+            if not (is_finite_number(quantity) and is_finite_number(unit_cost)):
+                result.add_error("total", "Total cannot be verified: line items contain non-finite or non-numeric values", declared)
+                return
+            calculated += quantity * unit_cost
+
+        if not is_finite_number(calculated):
+            result.add_error("total", "Calculated total is not a finite number", declared)
+            return
+
         variance = abs(calculated - declared)
 
-        if variance > 0.01:
+        # Written as "not <=" so a NaN variance is still reported as a mismatch
+        if not variance <= 0.01:
             result.add_error("total", f"Total mismatch: calculated {calculated:.2f}, declared {declared:.2f}", variance)
 
     def _validate_cost_ranges(self, data: dict, result: ValidationResult):
         gross_area = data['gross_area']
+        if not is_finite_number(gross_area):
+            result.add_error("gross_area", "Gross area must be a finite number", gross_area)
+            return
 
         for item in data.get('line_items', []):
             csi_div = item.get('csi_code', '')[:2]
             if csi_div in self.TYPICAL_RANGES:
-                amount = item.get('quantity', 0) * item.get('unit_cost', 0)
+                quantity = item.get('quantity', 0)
+                unit_cost = item.get('unit_cost', 0)
+                if not (is_finite_number(quantity) and is_finite_number(unit_cost)):
+                    continue
+                amount = quantity * unit_cost
+                if not is_finite_number(amount):
+                    continue
                 cost_per_sf = amount / gross_area if gross_area > 0 else 0
 
                 low, high = self.TYPICAL_RANGES[csi_div]
@@ -232,6 +275,10 @@ class ScheduleValidator:
                 except ValueError as e:
                     result.add_error(f"tasks[{i}]", f"Invalid date format: {e}")
 
+            duration_value = task.get('duration')
+            if isinstance(duration_value, float) and not math.isfinite(duration_value):
+                result.add_error(f"tasks[{i}].duration", "Duration must be a finite number", duration_value)
+
             # Check for missing duration
             if not task.get('duration') and not (start and end):
                 result.add_error(f"tasks[{i}]", "Task missing duration or start/end dates")
@@ -276,13 +323,21 @@ class ScheduleValidator:
             # Simplified: just check if any resource assigned to multiple tasks
             for resource in resources:
                 res_id = resource.get('id') or resource.get('name')
+                allocation = resource.get('allocation', 100)
+                if not is_finite_number(allocation):
+                    result.add_error(
+                        f"resource[{res_id}].allocation",
+                        f"Allocation must be a finite number (task {task.get('id')})",
+                        allocation
+                    )
+                    continue
                 if res_id not in resource_usage:
                     resource_usage[res_id] = []
                 resource_usage[res_id].append({
                     'task': task.get('id'),
                     'start': start,
                     'end': end,
-                    'allocation': resource.get('allocation', 100)
+                    'allocation': allocation
                 })
 
         # Check allocations
@@ -344,7 +399,11 @@ class BIMDataValidator:
 
             # Check for valid quantities
             for qty_name in ['area', 'volume', 'length']:
-                if qty_name in elem and elem[qty_name] < 0:
+                if elem.get(qty_name) is None:
+                    continue
+                if not is_finite_number(elem[qty_name]):
+                    result.add_error(f"elements[{i}].{qty_name}", f"{qty_name.capitalize()} must be a finite number", elem[qty_name])
+                elif elem[qty_name] < 0:
                     result.add_error(f"elements[{i}].{qty_name}", f"Negative {qty_name} value", elem[qty_name])
 
     def _validate_properties(self, property_sets: list, result: ValidationResult):
@@ -401,7 +460,13 @@ class FieldDataValidator:
 
         # Validate workforce
         if 'workforce' in data:
-            total = sum(w.get('count', 0) for w in data['workforce'])
+            total = 0
+            for i, w in enumerate(data['workforce']):
+                count = w.get('count', 0)
+                if not is_finite_number(count):
+                    result.add_error(f"workforce[{i}].count", "Workforce count must be a finite number", count)
+                    continue
+                total += count
             if total == 0:
                 result.add_warning("workforce", "No workers reported on-site")
             if total > 500:
@@ -429,13 +494,16 @@ class FieldDataValidator:
 
     def _validate_progress(self, data: dict, result: ValidationResult):
         # Check percentage values
-        if 'percent_complete' in data:
-            pct = data['percent_complete']
-            if pct < 0 or pct > 100:
-                result.add_error("percent_complete", f"Invalid percentage: {pct}", suggestion="Must be 0-100")
+        percentages_ok = True
+        for key in ('percent_complete', 'previous_percent'):
+            if key in data:
+                pct = data[key]
+                if not is_finite_number(pct) or pct < 0 or pct > 100:
+                    result.add_error(key, f"Invalid percentage: {pct}", suggestion="Must be a finite number from 0 to 100")
+                    percentages_ok = False
 
         # Check for regression (if previous value available)
-        if 'previous_percent' in data and 'percent_complete' in data:
+        if percentages_ok and 'previous_percent' in data and 'percent_complete' in data:
             if data['percent_complete'] < data['previous_percent']:
                 result.add_warning("percent_complete", "Progress decreased from previous report",
                                   f"{data['previous_percent']}% -> {data['percent_complete']}%")

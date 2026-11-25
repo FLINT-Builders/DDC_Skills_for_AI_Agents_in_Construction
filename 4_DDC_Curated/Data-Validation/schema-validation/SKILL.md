@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 from enum import Enum
 import json
+import math
 import re
 from datetime import datetime
 
@@ -153,6 +154,12 @@ class SchemaValidator:
         if not self._check_type(value, schema.type):
             result.add_error(path, f"Invalid type", schema.type.value, type(value).__name__)
             return
+
+        # NaN and +/-inf compare False against every bound, so reject them before range checks
+        if schema.type in (SchemaType.NUMBER, SchemaType.INTEGER, SchemaType.CURRENCY):
+            if isinstance(value, float) and not math.isfinite(value):
+                result.add_error(path, "Non-finite number", "finite number", value)
+                return
 
         # String validations
         if schema.type == SchemaType.STRING:
