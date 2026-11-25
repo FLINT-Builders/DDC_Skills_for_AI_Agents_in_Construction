@@ -53,6 +53,7 @@ class DefectSeverity(Enum):
 class NCRStatus(Enum):
     DRAFT = "draft"
     ISSUED = "issued"
+    RESPONSE_SUBMITTED = "response_submitted"  # Awaiting inspector review
     ACCEPTED = "accepted"
     DISPUTED = "disputed"
     IN_REMEDIATION = "in_remediation"
@@ -116,6 +117,11 @@ class NonConformanceReport:
     remediation_plan: str = ""
     cost_impact: float = 0.0
     schedule_impact_days: int = 0
+    reviewed_by: str = ""
+    verified_by: str = ""
+
+def _normalize_identity(name) -> str:
+    return " ".join(str(name or "").split()).casefold()
 
 class QualityControlManager:
     """Manage construction quality control workflow."""
@@ -254,35 +260,85 @@ class QualityControlManager:
         ncr.issued_date = datetime.now()
         return ncr
 
+    def _get_ncr(self, ncr_id: str) -> NonConformanceReport:
+        try:
+            return self.ncrs[ncr_id]
+        except KeyError:
+            raise ValueError(f"NCR {ncr_id} not found") from None
+
+    @staticmethod
+    def _require_inspector(ncr: NonConformanceReport, name: str, action: str) -> str:
+        """Return the inspector name, refusing blank names and the NCR's contractor."""
+        identity = _normalize_identity(name)
+        if not identity:
+            raise PermissionError(f"An inspector name is required to {action} {ncr.id}")
+        if identity == _normalize_identity(ncr.contractor):
+            raise PermissionError(
+                f"Contractor {ncr.contractor} cannot {action} their own NCR {ncr.id}")
+        return str(name).strip()
+
     def record_ncr_response(self, ncr_id: str, response: str,
                            remediation_plan: str, cost_impact: float = 0,
                            schedule_impact: int = 0) -> NonConformanceReport:
-        """Record contractor response to NCR."""
-        if ncr_id not in self.ncrs:
-            raise ValueError(f"NCR {ncr_id} not found")
+        """Record contractor response to NCR for inspector review.
 
-        ncr = self.ncrs[ncr_id]
+        A response never approves the NCR. Any new response to an open NCR,
+        including one already accepted or in remediation, goes back to
+        inspector review. Verified or closed NCRs are left unchanged.
+        """
+        ncr = self._get_ncr(ncr_id)
+        if ncr.status in (NCRStatus.VERIFIED, NCRStatus.CLOSED):
+            return ncr
+
         ncr.contractor_response = response
         ncr.remediation_plan = remediation_plan
         ncr.cost_impact = cost_impact
         ncr.schedule_impact_days = schedule_impact
-        ncr.status = NCRStatus.ACCEPTED
+        if ncr.status != NCRStatus.DRAFT:
+            ncr.status = NCRStatus.RESPONSE_SUBMITTED
+            ncr.reviewed_by = ""
+        return ncr
+
+    def review_ncr_response(self, ncr_id: str, reviewed_by: str,
+                            accept: bool) -> NonConformanceReport:
+        """Inspector accepts or disputes the contractor's response."""
+        ncr = self._get_ncr(ncr_id)
+        if ncr.status != NCRStatus.RESPONSE_SUBMITTED:
+            raise ValueError(
+                f"NCR {ncr_id} has no response awaiting review (status: {ncr.status.value})")
+        reviewer = self._require_inspector(ncr, reviewed_by, "review the response to")
+
+        ncr.reviewed_by = reviewer
+        ncr.status = NCRStatus.ACCEPTED if accept else NCRStatus.DISPUTED
+        return ncr
+
+    def start_remediation(self, ncr_id: str) -> NonConformanceReport:
+        """Begin remediation under an accepted response."""
+        ncr = self._get_ncr(ncr_id)
+        if ncr.status != NCRStatus.ACCEPTED:
+            raise ValueError(
+                f"NCR {ncr_id} response has not been accepted (status: {ncr.status.value})")
+
+        ncr.status = NCRStatus.IN_REMEDIATION
         return ncr
 
     def verify_remediation(self, ncr_id: str, verified_by: str) -> NonConformanceReport:
-        """Verify NCR remediation is complete."""
-        if ncr_id not in self.ncrs:
-            raise ValueError(f"NCR {ncr_id} not found")
+        """Inspector verifies NCR remediation and closes its defects."""
+        ncr = self._get_ncr(ncr_id)
+        if ncr.status != NCRStatus.IN_REMEDIATION:
+            raise ValueError(
+                f"NCR {ncr_id} is not in remediation (status: {ncr.status.value})")
+        inspector = self._require_inspector(ncr, verified_by, "verify remediation of")
 
-        ncr = self.ncrs[ncr_id]
         ncr.status = NCRStatus.VERIFIED
+        ncr.verified_by = inspector
 
-        # Close associated defects
+        closed_at = datetime.now()
         for def_id in ncr.defect_ids:
             if def_id in self.defects:
                 self.defects[def_id].status = "closed"
-                self.defects[def_id].verified_by = verified_by
-                self.defects[def_id].closed_date = datetime.now()
+                self.defects[def_id].verified_by = inspector
+                self.defects[def_id].closed_date = closed_at
 
         return ncr
 
@@ -384,6 +440,16 @@ defect = qc.record_defect(
 # Create NCR
 ncr = qc.create_ncr([defect.id], "Rebar Spacing Non-Conformance", "ABC Concrete")
 qc.issue_ncr(ncr.id)
+
+# Contractor responds; the NCR waits for inspector review
+qc.record_ncr_response(ncr.id, "Rebar will be respaced", "Remove and re-tie affected bars")
+
+# Inspector (not the contractor) accepts the response, then remediation starts
+qc.review_ncr_response(ncr.id, reviewed_by="QC Engineer", accept=True)
+qc.start_remediation(ncr.id)
+
+# Inspector verifies the fix; only then are the linked defects closed
+qc.verify_remediation(ncr.id, verified_by="QC Engineer")
 
 # Get metrics
 print(qc.generate_qc_report())
