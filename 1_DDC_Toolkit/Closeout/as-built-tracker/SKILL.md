@@ -144,10 +144,15 @@ class AsBuiltTracker:
                           file_path: str = "") -> Optional[DocumentSubmission]:
         """Record document submission."""
 
-        if document_id not in self.documents:
+        doc = self.documents.get(document_id)
+        if doc is None:
             return None
 
-        doc = self.documents[document_id]
+        if doc.status not in (DocumentStatus.NOT_STARTED, DocumentStatus.IN_PROGRESS,
+                              DocumentStatus.REJECTED, DocumentStatus.RESUBMIT):
+            raise ValueError(
+                f"{document_id} is {doc.status.value}; it cannot be resubmitted "
+                f"until a reviewer rejects it")
 
         submission = DocumentSubmission(
             submission_id=f"SUB-{len(self.submissions)+1:04d}",
@@ -165,6 +170,7 @@ class AsBuiltTracker:
         doc.status = DocumentStatus.SUBMITTED
         doc.current_revision = revision
         doc.submitted_date = date.today()
+        doc.approved_date = None
 
         return submission
 
