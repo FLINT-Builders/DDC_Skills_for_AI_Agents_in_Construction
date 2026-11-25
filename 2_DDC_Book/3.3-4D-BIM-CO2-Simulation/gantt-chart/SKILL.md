@@ -28,6 +28,22 @@ from datetime import date, timedelta
 from enum import Enum
 
 
+# Leading characters that make a spreadsheet treat a cell as a formula.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def excel_safe(value: Any) -> Any:
+    """Return value so a spreadsheet stores it as text, never as a formula."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe to every cell before writing schedule data."""
+    return df.apply(lambda column: column.map(excel_safe))
+
+
 class TaskStatus(Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
@@ -283,7 +299,7 @@ class GanttChartGenerator:
                 'Status': t.status.value,
                 'Level': t.level
             } for t in self.tasks.values()])
-            tasks_df.to_excel(writer, sheet_name='Tasks', index=False)
+            excel_safe_df(tasks_df).to_excel(writer, sheet_name='Tasks', index=False)
 
             # Dependencies
             deps_df = pd.DataFrame([{
@@ -292,7 +308,7 @@ class GanttChartGenerator:
                 'Type': d.dep_type.value,
                 'Lag': d.lag
             } for d in self.dependencies])
-            deps_df.to_excel(writer, sheet_name='Dependencies', index=False)
+            excel_safe_df(deps_df).to_excel(writer, sheet_name='Dependencies', index=False)
 
         return output_path
 ```
