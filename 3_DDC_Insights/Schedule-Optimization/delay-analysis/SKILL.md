@@ -36,10 +36,12 @@ Analyze construction schedule delays for project recovery and claims. Perform ti
 
 ```python
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
 from collections import defaultdict
+from fractions import Fraction
+import math
 
 class DelayType(Enum):
     EXCUSABLE_COMPENSABLE = "excusable_compensable"      # Owner caused - time + money
@@ -72,8 +74,9 @@ class DelayEvent:
     responsible_party: str
     documented: bool = True
     supporting_docs: List[str] = field(default_factory=list)
-    calculated_impact: int = 0  # days
+    calculated_impact: int = 0  # days; only meaningful once impact_analyzed is True
     concurrent_with: List[str] = field(default_factory=list)
+    impact_analyzed: bool = False
 
 @dataclass
 class ScheduleVersion:
@@ -109,6 +112,7 @@ class DelayAnalysisReport:
     delay_by_party: Dict[str, int]
     recommended_extension: int
     potential_damages: float
+    unanalyzed_events: List[str] = field(default_factory=list)
 
 class DelayAnalyzer:
     """Analyze construction schedule delays."""
@@ -127,6 +131,8 @@ class DelayAnalyzer:
         self.delay_events: Dict[str, DelayEvent] = {}
         self.schedule_versions: Dict[str, ScheduleVersion] = {}
         self.window_periods: List[WindowPeriod] = []
+        # event_id -> snapshot of the event as it was when its TIA ran
+        self.impact_analyses: Dict[str, Dict] = {}
         self.daily_cost = self.DEFAULT_DAILY_COSTS["medium"]
 
     def set_daily_delay_cost(self, cost: float):
@@ -165,6 +171,7 @@ class DelayAnalyzer:
             responsible_party=responsible_party,
             supporting_docs=supporting_docs or []
         )
+        self.impact_analyses.pop(id, None)
         self.delay_events[id] = event
         return event
 
@@ -233,7 +240,7 @@ class DelayAnalyzer:
 
         # Calculate impact
         original_completion = pre_delay_schedule.completion_date
-        delay_duration = (event.end_date - event.start_date).days
+        delay_duration = max(0, (event.end_date - event.start_date).days)
 
         # Check if delay is on critical path
         critical_impact = False
@@ -253,6 +260,14 @@ class DelayAnalyzer:
             new_completion = original_completion + timedelta(days=impact_days)
 
         event.calculated_impact = impact_days
+        event.impact_analyzed = True
+        self.impact_analyses[delay_event_id] = {
+            'event': event,
+            'start_date': event.start_date,
+            'end_date': event.end_date,
+            'affected_activities': tuple(event.affected_activities),
+            'impact_days': impact_days,
+        }
 
         return {
             'method': 'Time Impact Analysis',
@@ -338,28 +353,104 @@ class DelayAnalyzer:
         self.window_periods = windows
         return windows
 
-    def calculate_delay_damages(self) -> Dict:
-        """Calculate potential delay damages."""
-        # Summarize delays by type
-        excusable_compensable = 0
-        excusable_non_compensable = 0
-        non_excusable = 0
+    def _analyzed_impact_days(self, event_id: str, event: DelayEvent) -> Optional[Set[int]]:
+        """Calendar days (as ordinals) on which an event delayed completion.
 
-        for event in self.delay_events.values():
-            impact = event.calculated_impact or (event.end_date - event.start_date).days
+        Returns None when the event has no time impact analysis, or when its
+        dates or activities changed after the analysis ran. The impact falls
+        on the last days of the event window, after any float is consumed.
+        """
+        record = self.impact_analyses.get(event_id)
+        if (record is None
+                or record['event'] is not event
+                or record['start_date'] != event.start_date
+                or record['end_date'] != event.end_date
+                or record['affected_activities'] != tuple(event.affected_activities)):
+            return None
+        end = event.end_date.toordinal()
+        return set(range(end - record['impact_days'], end))
 
-            # Adjust for concurrency
-            if event.concurrent_with:
-                impact = impact // 2  # Simplified concurrency handling
+    def _classify_delay_days(self) -> Dict:
+        """Merge analyzed impacts into day sets so overlapping days count once.
 
-            if event.delay_type == DelayType.EXCUSABLE_COMPENSABLE:
-                excusable_compensable += impact
-            elif event.delay_type == DelayType.EXCUSABLE_NON_COMPENSABLE:
-                excusable_non_compensable += impact
-            elif event.delay_type == DelayType.NON_EXCUSABLE:
-                non_excusable += impact
+        Days where an excusable impact overlaps a non-excusable or CONCURRENT
+        impact are concurrent: they extend time but earn neither delay
+        damages nor liquidated damages.
+        """
+        days_by_type = {delay_type: set() for delay_type in DelayType}
+        days_by_event: Dict[str, Set[int]] = {}
+        unanalyzed = []
 
-        # Calculate damages
+        for event_id, event in self.delay_events.items():
+            days = self._analyzed_impact_days(event_id, event)
+            if days is None:
+                unanalyzed.append(event_id)
+                continue
+            days_by_event[event_id] = days
+            days_by_type[event.delay_type] |= days
+
+        compensable = days_by_type[DelayType.EXCUSABLE_COMPENSABLE]
+        time_only = days_by_type[DelayType.EXCUSABLE_NON_COMPENSABLE]
+        excusable = compensable | time_only
+        non_excusable = days_by_type[DelayType.NON_EXCUSABLE]
+        concurrent = days_by_type[DelayType.CONCURRENT] | (excusable & non_excusable)
+
+        return {
+            'extension': excusable,
+            'compensable': compensable - concurrent,
+            'time_only': time_only - concurrent,
+            'non_excusable': non_excusable - concurrent,
+            'concurrent': concurrent,
+            'by_event': days_by_event,
+            'unanalyzed': unanalyzed,
+        }
+
+    def _overrun_days(self, actual_completion: Optional[datetime]) -> Optional[int]:
+        """Days actual completion ran past contract completion (never negative)."""
+        if actual_completion is None:
+            as_built = self.schedule_versions.get("as_built")
+            if as_built is None:
+                return None
+            actual_completion = as_built.completion_date
+        return max(0, (actual_completion - self.contract_completion).days)
+
+    @staticmethod
+    def _apportion(amounts: Dict[str, Fraction], total: int) -> Dict[str, int]:
+        """Scale amounts down to whole days summing to min(total, sum(amounts))."""
+        available = sum(amounts.values())
+        target = min(total, math.floor(available))
+        if target <= 0 or available <= 0:
+            return {key: 0 for key in amounts}
+        quotas = {key: Fraction(value) * target / available for key, value in amounts.items()}
+        result = {key: math.floor(quota) for key, quota in quotas.items()}
+        leftover = target - sum(result.values())
+        by_remainder = sorted(quotas, key=lambda key: -(quotas[key] - result[key]))
+        for key in by_remainder[:leftover]:
+            result[key] += 1
+        return result
+
+    def calculate_delay_damages(self, actual_completion: Optional[datetime] = None) -> Dict:
+        """Calculate potential delay damages from analyzed impacts only.
+
+        Events without a current time impact analysis are excluded and listed
+        in 'unanalyzed_events'. When the actual completion is known (passed in,
+        or taken from an "as_built" schedule version), the time extension and
+        compensable days are capped at the actual overrun, and liquidated
+        damages at the overrun left unexcused by that extension.
+        """
+        days = self._classify_delay_days()
+        extension = len(days['extension'])
+        excusable_compensable = len(days['compensable'])
+        excusable_non_compensable = len(days['time_only'])
+        non_excusable = len(days['non_excusable'])
+
+        overrun = self._overrun_days(actual_completion)
+        if overrun is not None:
+            extension = min(extension, overrun)
+            excusable_compensable = min(excusable_compensable, extension)
+            excusable_non_compensable = min(excusable_non_compensable, extension)
+            non_excusable = min(non_excusable, overrun - extension)
+
         contractor_damages = excusable_compensable * self.daily_cost
         owner_ld = non_excusable * self.daily_cost
 
@@ -367,38 +458,59 @@ class DelayAnalyzer:
             'excusable_compensable_days': excusable_compensable,
             'excusable_non_compensable_days': excusable_non_compensable,
             'non_excusable_days': non_excusable,
-            'recommended_time_extension': excusable_compensable + excusable_non_compensable,
+            'recommended_time_extension': extension,
             'contractor_delay_damages': contractor_damages,
             'owner_liquidated_damages': owner_ld,
-            'daily_rate_used': self.daily_cost
+            'daily_rate_used': self.daily_cost,
+            'overrun_days': overrun,
+            'unanalyzed_events': days['unanalyzed']
         }
 
-    def generate_analysis_report(self, actual_completion: datetime) -> DelayAnalysisReport:
-        """Generate comprehensive delay analysis report."""
-        total_delay = (actual_completion - self.contract_completion).days
+    def _attribute_days(self, day_set: Set[int], days_by_event: Dict[str, Set[int]],
+                        total: int, key_of) -> Dict[str, int]:
+        """Share each day among the events covering it, then scale to total."""
+        shares: Dict[str, Fraction] = defaultdict(Fraction)
+        for day in day_set:
+            covering = [event_id for event_id, days in days_by_event.items() if day in days]
+            for event_id in covering:
+                shares[key_of(self.delay_events[event_id])] += Fraction(1, len(covering))
+        return self._apportion(dict(shares), total)
 
-        # Categorize delays
+    def generate_analysis_report(self, actual_completion: datetime) -> DelayAnalysisReport:
+        """Generate comprehensive delay analysis report.
+
+        Every day figure in the report is limited to the actual overrun, so a
+        project that finished on time or early reports no delay award.
+        """
+        total_delay = (actual_completion - self.contract_completion).days
+        overrun = max(0, total_delay)
+
+        days = self._classify_delay_days()
+        damages = self.calculate_delay_damages(actual_completion)
+        extension = damages['recommended_time_extension']
+
+        extension_days = days['extension']
+        extension_split = self._apportion({
+            'excusable': len(extension_days - days['concurrent']),
+            'concurrent': len(extension_days & days['concurrent']),
+        }, extension)
+
+        unexcused_days = days['non_excusable'] | (days['concurrent'] - extension_days)
+        unexcused_split = self._apportion({
+            'non_excusable': len(days['non_excusable']),
+            'concurrent': len(days['concurrent'] - extension_days),
+        }, overrun - extension)
+        unexcused = sum(unexcused_split.values())
+
         delay_by_cause = defaultdict(int)
         delay_by_party = defaultdict(int)
-        excusable = 0
-        non_excusable = 0
-        concurrent = 0
-
-        for event in self.delay_events.values():
-            impact = event.calculated_impact or (event.end_date - event.start_date).days
-
-            delay_by_cause[event.cause.value] += impact
-            delay_by_party[event.responsible_party] += impact
-
-            if event.concurrent_with:
-                concurrent += impact // 2
-            elif event.delay_type in [DelayType.EXCUSABLE_COMPENSABLE,
-                                      DelayType.EXCUSABLE_NON_COMPENSABLE]:
-                excusable += impact
-            else:
-                non_excusable += impact
-
-        damages = self.calculate_delay_damages()
+        for day_set, total in ((extension_days, extension), (unexcused_days, unexcused)):
+            for cause, count in self._attribute_days(
+                    day_set, days['by_event'], total, lambda e: e.cause.value).items():
+                delay_by_cause[cause] += count
+            for party, count in self._attribute_days(
+                    day_set, days['by_event'], total, lambda e: e.responsible_party).items():
+                delay_by_party[party] += count
 
         return DelayAnalysisReport(
             project_name=self.project_name,
@@ -406,14 +518,15 @@ class DelayAnalyzer:
             original_completion=self.contract_completion,
             actual_completion=actual_completion,
             total_delay=total_delay,
-            excusable_delay=excusable,
-            non_excusable_delay=non_excusable,
-            concurrent_delay=concurrent,
+            excusable_delay=extension_split['excusable'],
+            non_excusable_delay=unexcused_split['non_excusable'],
+            concurrent_delay=extension_split['concurrent'] + unexcused_split['concurrent'],
             delay_events=list(self.delay_events.values()),
-            delay_by_cause=dict(delay_by_cause),
-            delay_by_party=dict(delay_by_party),
-            recommended_extension=damages['recommended_time_extension'],
-            potential_damages=damages['contractor_delay_damages']
+            delay_by_cause={k: v for k, v in delay_by_cause.items() if v},
+            delay_by_party={k: v for k, v in delay_by_party.items() if v},
+            recommended_extension=extension,
+            potential_damages=damages['contractor_delay_damages'],
+            unanalyzed_events=days['unanalyzed']
         )
 
     def generate_report_markdown(self, report: DelayAnalysisReport) -> str:
@@ -464,6 +577,17 @@ class DelayAnalyzer:
             f"- **Potential Delay Damages:** ${report.potential_damages:,.0f}",
             ""
         ])
+
+        if report.unanalyzed_events:
+            lines.extend([
+                "## Excluded Events (no current time impact analysis)",
+                ""
+            ])
+            for event_id in report.unanalyzed_events:
+                event = self.delay_events.get(event_id)
+                label = f"{event.description} ({event.responsible_party})" if event else ""
+                lines.append(f"- {event_id}: {label} — not counted until analyzed")
+            lines.append("")
 
         return "\n".join(lines)
 ```
@@ -517,9 +641,10 @@ analyzer.add_delay_event(
     "Owner"
 )
 
-# Perform analyses
-tia = analyzer.perform_time_impact_analysis("D001")
-print(f"TIA Impact: {tia['schedule_impact_days']} days")
+# Perform analyses - events without a TIA are excluded from extensions and damages
+for event_id in analyzer.delay_events:
+    tia = analyzer.perform_time_impact_analysis(event_id)
+    print(f"TIA Impact {event_id}: {tia['schedule_impact_days']} days")
 
 concurrent = analyzer.identify_concurrent_delays()
 print(f"Concurrent delays found: {len(concurrent)}")
