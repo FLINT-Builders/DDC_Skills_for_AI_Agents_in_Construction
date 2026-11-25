@@ -417,6 +417,16 @@ def classify_carbon_intensity(co2_per_m2):
     else:
         return {'rating': 'E', 'description': 'High carbon'}
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def excel_safe_text(value):
+    """Prefix ' to text a spreadsheet would evaluate as a formula (BIM names are untrusted)."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in '\t\r\n' or value.lstrip().startswith(FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
 def export_carbon_report(report, filepath):
     """Export carbon report to Excel"""
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
@@ -426,19 +436,25 @@ def export_carbon_report(report, filepath):
             'Value': [
                 f"{report['total_co2_tonnes']:,.1f}",
                 f"{report['co2_per_m2']:,.0f} kg/m²",
-                report['benchmark_comparison']['rating'],
+                excel_safe_text(report['benchmark_comparison']['rating']),
                 f"{report['floor_area_m2']:,.0f} m²"
             ]
         })
         summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
         # By category
-        cat_df = pd.DataFrame.from_dict(report['by_category'], orient='index', columns=['CO2_kg'])
-        cat_df.to_excel(writer, sheet_name='By Category')
+        cat_df = pd.DataFrame({
+            'Category': [excel_safe_text(k) for k in report['by_category']],
+            'CO2_kg': list(report['by_category'].values()),
+        })
+        cat_df.to_excel(writer, sheet_name='By Category', index=False)
 
         # By material
-        mat_df = pd.DataFrame.from_dict(report['by_material'], orient='index', columns=['CO2_kg'])
-        mat_df.to_excel(writer, sheet_name='By Material')
+        mat_df = pd.DataFrame({
+            'Material': [excel_safe_text(k) for k in report['by_material']],
+            'CO2_kg': list(report['by_material'].values()),
+        })
+        mat_df.to_excel(writer, sheet_name='By Material', index=False)
 ```
 
 ## Carbon Reduction Strategies
