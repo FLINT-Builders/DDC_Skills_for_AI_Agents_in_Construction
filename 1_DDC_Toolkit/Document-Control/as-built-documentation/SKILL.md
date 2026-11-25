@@ -138,23 +138,35 @@ class AsBuiltDocumentManager:
                     markup.status = status
                     break
 
-    def upload_as_built(self, doc_id: str, file_path: str, new_revision: str = None):
-        if doc_id not in self.documents:
-            return
-        doc = self.documents[doc_id]
+    def upload_as_built(self, doc_id: str, file_path: str, new_revision: str = None) -> bool:
+        """Upload an as-built file. Refused once the document is approved or final."""
+        doc = self.documents.get(doc_id)
+        if doc is None:
+            return False
+        if doc.status in (DocumentStatus.APPROVED, DocumentStatus.FINAL):
+            return False
         doc.as_built_file = file_path
         doc.last_updated = date.today()
         if new_revision:
             doc.revision = new_revision
         doc.status = DocumentStatus.UNDER_REVIEW
+        doc.verified_by = ""
+        doc.verified_date = None
+        return True
 
-    def verify_document(self, doc_id: str, verified_by: str):
-        if doc_id not in self.documents:
-            return
-        doc = self.documents[doc_id]
+    def verify_document(self, doc_id: str, verified_by: str,
+                        as_built_file: Optional[str] = None) -> bool:
+        """Mark document final. Pass the as-built file that was checked; the
+        verification is refused if a different file has been uploaded since."""
+        doc = self.documents.get(doc_id)
+        if doc is None:
+            return False
+        if as_built_file is not None and as_built_file != doc.as_built_file:
+            return False
         doc.verified_by = verified_by
         doc.verified_date = date.today()
         doc.status = DocumentStatus.FINAL
+        return True
 
     def get_completeness_report(self) -> Dict[str, Any]:
         total = len(self.documents)
@@ -245,7 +257,7 @@ markup = manager.add_markup(
 manager.upload_as_built(doc.document_id, "as-built/A-101-AB.pdf", "AB")
 
 # Verify
-manager.verify_document(doc.document_id, "Project Manager")
+manager.verify_document(doc.document_id, "Project Manager", as_built_file="as-built/A-101-AB.pdf")
 
 # Check completeness
 report = manager.get_completeness_report()

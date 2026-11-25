@@ -89,28 +89,46 @@ class SubmittalTracker:
         self.submittals[sub_id] = submittal
         return submittal
 
-    def submit(self, sub_id: str, files: List[str]):
-        if sub_id in self.submittals:
-            self.submittals[sub_id].status = SubmittalStatus.SUBMITTED
-            self.submittals[sub_id].submitted_date = date.today()
-            self.submittals[sub_id].files = files
+    def submit(self, sub_id: str, files: List[str]) -> bool:
+        """First submission. Only a draft can be submitted; use resubmit afterwards."""
+        sub = self.submittals.get(sub_id)
+        if sub is None or sub.status != SubmittalStatus.DRAFT:
+            return False
+        sub.status = SubmittalStatus.SUBMITTED
+        sub.submitted_date = date.today()
+        sub.files = files
+        sub.approved_date = None
+        return True
 
-    def review(self, sub_id: str, status: SubmittalStatus, reviewer: str, comment: str = ""):
-        if sub_id in self.submittals:
-            sub = self.submittals[sub_id]
-            sub.status = status
-            if comment:
-                sub.comments.append(ReviewComment(reviewer, comment, date.today()))
-            if status in [SubmittalStatus.APPROVED, SubmittalStatus.APPROVED_AS_NOTED]:
-                sub.approved_date = date.today()
+    def review(self, sub_id: str, status: SubmittalStatus, reviewer: str, comment: str = "",
+               revision: Optional[int] = None) -> bool:
+        """Record a review. Pass the revision that was reviewed; the review is
+        refused if the submittal has been resubmitted since."""
+        sub = self.submittals.get(sub_id)
+        if sub is None:
+            return False
+        if revision is not None and revision != sub.revision:
+            return False
+        sub.status = status
+        if comment:
+            sub.comments.append(ReviewComment(reviewer, comment, date.today()))
+        if status in [SubmittalStatus.APPROVED, SubmittalStatus.APPROVED_AS_NOTED]:
+            sub.approved_date = date.today()
+        else:
+            sub.approved_date = None
+        return True
 
-    def resubmit(self, sub_id: str, files: List[str]):
-        if sub_id in self.submittals:
-            sub = self.submittals[sub_id]
-            sub.revision += 1
-            sub.status = SubmittalStatus.SUBMITTED
-            sub.submitted_date = date.today()
-            sub.files = files
+    def resubmit(self, sub_id: str, files: List[str]) -> bool:
+        """Resubmit after a revise-and-resubmit or rejected review."""
+        sub = self.submittals.get(sub_id)
+        if sub is None or sub.status not in [SubmittalStatus.REVISE_RESUBMIT, SubmittalStatus.REJECTED]:
+            return False
+        sub.revision += 1
+        sub.status = SubmittalStatus.SUBMITTED
+        sub.submitted_date = date.today()
+        sub.files = files
+        sub.approved_date = None
+        return True
 
     def get_pending(self) -> List[Submittal]:
         return [s for s in self.submittals.values()
