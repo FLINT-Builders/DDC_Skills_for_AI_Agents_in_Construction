@@ -117,6 +117,36 @@ class QuantityItem:
     zone: str = ""
 
 
+# Category, type, and level names come from the BIM export. Excel writers store
+# any string that starts with "=" as a formula, and spreadsheet apps evaluate
+# CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export"""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
+
 class BIMQuantityExtractor:
     """Extract quantities from BIM models using DDC converters"""
 
@@ -322,10 +352,11 @@ class BIMQuantityExtractor:
                 'Volume (m³)': 'sum',
                 'Length (m)': 'sum'
             }).round(2)
-            summary.to_excel(writer, sheet_name='Summary')
+            escape_excel_formulas(summary).to_excel(writer, sheet_name='Summary')
 
             # Detail sheet
-            df.to_excel(writer, sheet_name='Detail', index=False)
+            escape_excel_formulas(df).to_excel(
+                writer, sheet_name='Detail', index=False)
 
             # By Level sheet
             if 'Level' in df.columns and df['Level'].notna().any():
@@ -334,7 +365,8 @@ class BIMQuantityExtractor:
                     'Area (m²)': 'sum',
                     'Volume (m³)': 'sum'
                 }).round(2)
-                level_summary.to_excel(writer, sheet_name='By Level')
+                escape_excel_formulas(level_summary).to_excel(
+                    writer, sheet_name='By Level')
 
         return output_path
 
