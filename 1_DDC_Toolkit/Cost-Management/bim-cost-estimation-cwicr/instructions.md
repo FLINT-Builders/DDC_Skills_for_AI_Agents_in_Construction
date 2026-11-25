@@ -36,4 +36,5 @@ When the user asks about CWICR database:
 - Network permission required for Qdrant vector database and OpenAI embeddings API
 - Filesystem permission required for BIM model reading and Excel export
 - subprocess.run() is used solely for invoking the DDC RvtExporter CAD conversion tool
+- BIM type names and categories come from the model author and are passed to the LLM only as delimited data; decompositions must be 1 to 8 unique work items, otherwise the type name is priced as a single item and the element is listed for review
 - All API keys must be loaded from environment variables, never hardcoded
