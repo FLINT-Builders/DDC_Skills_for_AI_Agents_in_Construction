@@ -148,6 +148,13 @@ class ChangeOrderManager:
         "bond": 0.01,      # 1%
     }
 
+    # Once approved, the approved amount is the contract figure and must not move.
+    LOCKED_STATUSES = (
+        ChangeOrderStatus.APPROVED,
+        ChangeOrderStatus.EXECUTED,
+        ChangeOrderStatus.VOID,
+    )
+
     def __init__(self, project_id: str, project_name: str,
                  original_contract: float):
         self.project_id = project_id
@@ -189,14 +196,33 @@ class ChangeOrderManager:
 
         return co
 
+    def _get_change_order(self, co_id: str) -> ChangeOrder:
+        """Resolve a change order once; callers check and edit this object only."""
+        co = self.change_orders.get(co_id)
+        if co is None:
+            raise ValueError(f"Change order {co_id} not found")
+        return co
+
+    @staticmethod
+    def _require_draft(co: ChangeOrder, action: str):
+        if co.status != ChangeOrderStatus.DRAFT:
+            raise ValueError(
+                f"Cannot {action} on change order {co.id} with status "
+                f"{co.status.value}; only draft change orders can be priced"
+            )
+
+    def _require_unlocked(self, co: ChangeOrder, action: str):
+        if co.status in self.LOCKED_STATUSES:
+            raise ValueError(
+                f"Cannot {action} change order {co.id} with status {co.status.value}"
+            )
+
     def add_line_item(self, co_id: str, description: str,
                      quantity: float, unit: str, unit_price: float,
                      spec_section: str = "", csi_code: str = "") -> ChangeOrderItem:
-        """Add line item to change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        """Add line item to a draft change order."""
+        co = self._get_change_order(co_id)
+        self._require_draft(co, "add line items")
 
         item_id = f"{co_id}-{len(co.line_items)+1:03d}"
         item = ChangeOrderItem(
@@ -220,11 +246,9 @@ class ChangeOrderManager:
     def set_cost_breakdown(self, co_id: str, labor: float = 0,
                           materials: float = 0, equipment: float = 0,
                           subcontractor: float = 0) -> CostBreakdown:
-        """Set cost breakdown and calculate markups."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        """Set cost breakdown on a draft change order and calculate markups."""
+        co = self._get_change_order(co_id)
+        self._require_draft(co, "set the cost breakdown")
 
         direct = labor + materials + equipment + subcontractor
 
@@ -260,10 +284,8 @@ class ChangeOrderManager:
 
     def submit_change_order(self, co_id: str) -> ChangeOrder:
         """Submit change order for review."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
+        self._require_unlocked(co, "submit")
         co.status = ChangeOrderStatus.SUBMITTED
         co.submitted_date = datetime.now()
 
@@ -274,10 +296,8 @@ class ChangeOrderManager:
     def approve_change_order(self, co_id: str, approved_amount: float,
                             approved_time: int = 0) -> ChangeOrder:
         """Approve change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
+        self._require_unlocked(co, "approve")
         co.status = ChangeOrderStatus.APPROVED
         co.approved_date = datetime.now()
         co.approved_amount = approved_amount
@@ -289,10 +309,8 @@ class ChangeOrderManager:
 
     def reject_change_order(self, co_id: str, reason: str) -> ChangeOrder:
         """Reject change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
+        self._require_unlocked(co, "reject")
         co.status = ChangeOrderStatus.REJECTED
 
         self._add_note(co, f"Rejected: {reason}")
@@ -301,10 +319,7 @@ class ChangeOrderManager:
 
     def execute_change_order(self, co_id: str) -> ChangeOrder:
         """Mark change order as executed."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
         if co.status != ChangeOrderStatus.APPROVED:
             raise ValueError("Change order must be approved before execution")
 
@@ -324,10 +339,7 @@ class ChangeOrderManager:
 
     def add_reference(self, co_id: str, ref_type: str, reference: str):
         """Add reference document to change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
 
         if ref_type == "rfi":
             co.rfi_references.append(reference)
@@ -409,10 +421,19 @@ class ChangeOrderManager:
 
     def generate_co_document(self, co_id: str) -> str:
         """Generate formal change order document."""
-        if co_id not in self.change_orders:
+        co = self.change_orders.get(co_id)
+        if co is None:
             return "Change order not found"
 
-        co = self.change_orders[co_id]
+        is_approved = co.status in (ChangeOrderStatus.APPROVED,
+                                    ChangeOrderStatus.EXECUTED)
+        if is_approved:
+            total_rows = [
+                f"| Proposed Amount | ${co.cost_breakdown.total:,.2f} |",
+                f"| **Approved Total** | **${co.approved_amount:,.2f}** |",
+            ]
+        else:
+            total_rows = [f"| **Total** | **${co.cost_breakdown.total:,.2f}** |"]
 
         lines = [
             f"# CHANGE ORDER NO. {co.number}",
@@ -457,7 +478,7 @@ class ChangeOrderManager:
             f"| Overhead | ${co.cost_breakdown.overhead:,.2f} |",
             f"| Profit | ${co.cost_breakdown.profit:,.2f} |",
             f"| Bond | ${co.cost_breakdown.bond:,.2f} |",
-            f"| **Total** | **${co.cost_breakdown.total:,.2f}** |",
+            *total_rows,
             "",
             f"## Time Impact",
             "",
