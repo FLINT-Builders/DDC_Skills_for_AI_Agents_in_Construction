@@ -504,11 +504,32 @@ class SequenceAnalyzer:
 ## Export and Integration
 
 ```python
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def excel_safe_text(value):
+    """Prefix ' to text a spreadsheet would evaluate as a formula (BIM names are untrusted)."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in '\t\r\n' or value.lstrip().startswith(FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df whose text cells and headers cannot be read as formulas."""
+    safe = df.copy()
+    safe.columns = range(safe.shape[1])
+    for col in safe.columns:
+        dtype = safe[col].dtype
+        if pd.api.types.is_string_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype):
+            safe[col] = safe[col].astype(object).map(excel_safe_text)
+    safe.columns = [excel_safe_text(c) for c in df.columns]
+    return safe
+
 def export_4d_schedule(elements: pd.DataFrame, output_path: str):
     """Export 4D schedule to Excel with multiple views"""
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         # Full schedule
-        elements.to_excel(writer, sheet_name='Schedule', index=False)
+        excel_safe_frame(elements).to_excel(writer, sheet_name='Schedule', index=False)
 
         # By level
         level_summary = elements.groupby('Level').agg({
@@ -517,7 +538,7 @@ def export_4d_schedule(elements: pd.DataFrame, output_path: str):
             'End_Date': 'max'
         }).rename(columns={'ElementId': 'Element_Count'})
         level_summary['Duration_Days'] = (level_summary['End_Date'] - level_summary['Start_Date']).dt.days
-        level_summary.to_excel(writer, sheet_name='By_Level')
+        excel_safe_frame(level_summary.reset_index()).to_excel(writer, sheet_name='By_Level', index=False)
 
         # By category
         cat_summary = elements.groupby('Category').agg({
@@ -525,7 +546,7 @@ def export_4d_schedule(elements: pd.DataFrame, output_path: str):
             'Start_Date': 'min',
             'End_Date': 'max'
         }).rename(columns={'ElementId': 'Element_Count'})
-        cat_summary.to_excel(writer, sheet_name='By_Category')
+        excel_safe_frame(cat_summary.reset_index()).to_excel(writer, sheet_name='By_Category', index=False)
 
     return output_path
 ```
