@@ -111,6 +111,9 @@ class ChangeOrder:
     approvals: List[ApprovalRecord] = field(default_factory=list)
     approved_date: Optional[date] = None
     approved_by: str = ""
+    # Figures as they stood when approved; summaries count these, not live totals
+    approved_total_cost: Optional[float] = None
+    approved_schedule_impact_days: Optional[int] = None
 
     # References
     rfi_reference: str = ""
@@ -130,6 +133,8 @@ class ChangeOrder:
             'profit_cost': self.profit_cost,
             'total_cost': self.total_cost,
             'schedule_impact': self.schedule_impact_days,
+            'approved_total_cost': self.approved_total_cost,
+            'approved_schedule_impact': self.approved_schedule_impact_days,
             'approved_date': self.approved_date.isoformat() if self.approved_date else None
         }
 
@@ -175,6 +180,20 @@ class ChangeOrderProcessor:
         self.change_orders[co_number] = co
         return co
 
+    def _get_change_order(self, co_number: str) -> ChangeOrder:
+        """Resolve a change order once; callers check and act on this object."""
+        co = self.change_orders.get(co_number)
+        if co is None:
+            raise ValueError(f"Change order {co_number} not found")
+        return co
+
+    @staticmethod
+    def _require_status(co: ChangeOrder, allowed: List[ChangeOrderStatus], action: str):
+        if co.status not in allowed:
+            raise ValueError(
+                f"Cannot {action} change order {co.co_number} in status {co.status.value}"
+            )
+
     def add_cost_item(self, co_number: str,
                      description: str,
                      quantity: float,
@@ -182,11 +201,9 @@ class ChangeOrderProcessor:
                      unit_cost: float,
                      category: str,
                      markup_percent: float = 0.0):
-        """Add cost item to change order."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        """Add cost item to a draft change order."""
+        co = self._get_change_order(co_number)
+        self._require_status(co, [ChangeOrderStatus.DRAFT], "edit costs of")
 
         total = quantity * unit_cost * (1 + markup_percent)
         item = CostItem(
@@ -211,20 +228,16 @@ class ChangeOrderProcessor:
 
     def set_schedule_impact(self, co_number: str, days: int,
                            affected_activities: List[str] = None):
-        """Set schedule impact."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
+        """Set schedule impact on a draft change order."""
+        co = self._get_change_order(co_number)
+        self._require_status(co, [ChangeOrderStatus.DRAFT], "edit schedule impact of")
 
-        co = self.change_orders[co_number]
         co.schedule_impact_days = days
-        co.affected_activities = affected_activities or []
+        co.affected_activities = list(affected_activities or [])
 
     def submit_for_review(self, co_number: str):
         """Submit change order for review."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        co = self._get_change_order(co_number)
         if co.status != ChangeOrderStatus.DRAFT:
             raise ValueError("Can only submit draft change orders")
 
@@ -232,10 +245,7 @@ class ChangeOrderProcessor:
 
     def submit_for_approval(self, co_number: str, reviewer: str, comments: str = ""):
         """Submit for approval after review."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        co = self._get_change_order(co_number)
         if co.status != ChangeOrderStatus.PENDING_REVIEW:
             raise ValueError("Must be in review status")
 
@@ -251,11 +261,9 @@ class ChangeOrderProcessor:
 
     def approve_change_order(self, co_number: str, approver: str,
                             approver_role: str, comments: str = ""):
-        """Approve change order."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        """Approve change order at its current reviewed figures."""
+        co = self._get_change_order(co_number)
+        self._require_status(co, [ChangeOrderStatus.PENDING_APPROVAL], "approve")
 
         co.approvals.append(ApprovalRecord(
             approver_name=approver,
@@ -268,14 +276,18 @@ class ChangeOrderProcessor:
         co.status = ChangeOrderStatus.APPROVED
         co.approved_date = date.today()
         co.approved_by = approver
+        co.approved_total_cost = co.total_cost
+        co.approved_schedule_impact_days = co.schedule_impact_days
 
     def reject_change_order(self, co_number: str, rejector: str,
                            reason: str):
         """Reject change order."""
-        if co_number not in self.change_orders:
-            raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        co = self._get_change_order(co_number)
+        self._require_status(
+            co,
+            [ChangeOrderStatus.PENDING_REVIEW, ChangeOrderStatus.PENDING_APPROVAL],
+            "reject",
+        )
 
         co.approvals.append(ApprovalRecord(
             approver_name=rejector,
@@ -302,14 +314,20 @@ class ChangeOrderProcessor:
             status = co.status.value
             by_status[status] = by_status.get(status, 0) + 1
 
+            # Approved orders count only the figures recorded at approval
+            if co.status == ChangeOrderStatus.APPROVED:
+                amount = co.approved_total_cost or 0.0
+            else:
+                amount = co.total_cost
+
             # By type
             change_type = co.change_type.value
-            by_type[change_type] = by_type.get(change_type, 0) + co.total_cost
+            by_type[change_type] = by_type.get(change_type, 0) + amount
 
             # Totals
             if co.status == ChangeOrderStatus.APPROVED:
-                total_approved += co.total_cost
-                total_schedule_impact += co.schedule_impact_days
+                total_approved += amount
+                total_schedule_impact += co.approved_schedule_impact_days or 0
             elif co.status in [ChangeOrderStatus.PENDING_REVIEW, ChangeOrderStatus.PENDING_APPROVAL]:
                 total_pending += co.total_cost
 
