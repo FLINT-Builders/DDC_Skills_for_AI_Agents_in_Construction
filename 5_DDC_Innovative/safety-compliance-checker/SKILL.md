@@ -229,19 +229,33 @@ class SafetyComplianceEngine:
         permits = activity.get('permits', [])
         equipment = activity.get('equipment', [])
 
-        # Fall protection check
+        # Fall protection check: a guardrail protects the whole crew; otherwise
+        # every worker needs their own harness. One worker's PPE never covers others.
         if height >= 6:
             fall_rule = self.rules.get("OSHA-1926.501")
             if fall_rule:
-                has_protection = any(
-                    'harness' in w.get('ppe', []) or 'guardrail' in equipment
-                    for w in workers
-                )
+                findings = []
+                if 'guardrail' not in self._as_items(equipment):
+                    if not workers:
+                        findings.append(
+                            f"Working at {height}ft with no guardrail and no workers "
+                            f"listed to verify harness use"
+                        )
+                    unprotected = [
+                        self._worker_label(w, i)
+                        for i, w in enumerate(workers, start=1)
+                        if 'harness' not in self._worker_ppe(w)
+                    ]
+                    if unprotected:
+                        findings.append(
+                            f"Working at {height}ft without guardrail; missing harness for: "
+                            f"{', '.join(unprotected)}"
+                        )
                 checks.append(ComplianceCheck(
                     rule_id=fall_rule.rule_id,
                     rule_name=fall_rule.name,
-                    status=ComplianceStatus.COMPLIANT if has_protection else ComplianceStatus.NON_COMPLIANT,
-                    findings=[] if has_protection else [f"Working at {height}ft without fall protection"],
+                    status=ComplianceStatus.COMPLIANT if not findings else ComplianceStatus.NON_COMPLIANT,
+                    findings=findings,
                     evidence=f"Activity: {activity_type} at {location}",
                     checked_at=datetime.now(),
                     checked_by="automated_system"
@@ -251,13 +265,13 @@ class SafetyComplianceEngine:
         for worker in workers:
             ppe_rule = self.rules.get("OSHA-1926.100")
             if ppe_rule:
-                has_helmet = 'helmet' in worker.get('ppe', [])
+                has_helmet = 'helmet' in self._worker_ppe(worker)
                 checks.append(ComplianceCheck(
                     rule_id=ppe_rule.rule_id,
                     rule_name=ppe_rule.name,
                     status=ComplianceStatus.COMPLIANT if has_helmet else ComplianceStatus.NON_COMPLIANT,
                     findings=[] if has_helmet else ["Missing hard hat"],
-                    evidence=f"Worker: {worker.get('id')}",
+                    evidence=f"Worker: {worker.get('id') if isinstance(worker, dict) else worker}",
                     checked_at=datetime.now(),
                     checked_by="automated_system"
                 ))
@@ -315,6 +329,26 @@ class SafetyComplianceEngine:
                 ))
 
         return checks
+
+    @staticmethod
+    def _as_items(value) -> set:
+        """Normalize a PPE/equipment list to exact item names (a bare string is one item, not a substring match)"""
+        if value is None:
+            return set()
+        if isinstance(value, str):
+            value = [value]
+        try:
+            return {str(item).strip().lower() for item in value}
+        except TypeError:
+            return set()
+
+    def _worker_ppe(self, worker) -> set:
+        return self._as_items(worker.get('ppe')) if isinstance(worker, dict) else set()
+
+    @staticmethod
+    def _worker_label(worker, position: int) -> str:
+        worker_id = worker.get('id') if isinstance(worker, dict) else None
+        return str(worker_id) if worker_id not in (None, '') else f"worker #{position}"
 
     def create_violation(self, check: ComplianceCheck, location: str) -> Violation:
         """Create violation record from failed check"""
