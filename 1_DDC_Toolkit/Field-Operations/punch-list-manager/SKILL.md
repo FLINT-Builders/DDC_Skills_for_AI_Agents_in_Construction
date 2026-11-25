@@ -180,6 +180,7 @@ class PunchList:
 ```python
 import pandas as pd
 from datetime import datetime, date, timedelta
+import uuid
 from typing import List, Dict, Optional
 from collections import defaultdict
 
@@ -203,7 +204,9 @@ class PunchListManager:
     ) -> PunchList:
         """Create new punch list from walk"""
 
-        list_id = f"PL-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        list_id = f"PL-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if list_id in self.punch_lists:
+            raise ValueError(f"Punch list {list_id} already exists")
 
         punch_list = PunchList(
             list_id=list_id,

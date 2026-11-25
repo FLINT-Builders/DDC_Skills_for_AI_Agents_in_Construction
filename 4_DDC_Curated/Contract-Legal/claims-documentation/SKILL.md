@@ -32,6 +32,7 @@ Document and manage construction claims for schedule delays, cost impacts, and s
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+import uuid
 from enum import Enum
 
 class ClaimType(Enum):
@@ -163,7 +164,9 @@ class ClaimsDocumentor:
                     description: str, event_date: datetime,
                     responsible_party: str) -> Claim:
         """Create new claim."""
-        claim_id = f"CLM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        claim_id = f"CLM-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if claim_id in self.claims:
+            raise ValueError(f"Claim {claim_id} already exists")
 
         claim = Claim(
             id=claim_id,

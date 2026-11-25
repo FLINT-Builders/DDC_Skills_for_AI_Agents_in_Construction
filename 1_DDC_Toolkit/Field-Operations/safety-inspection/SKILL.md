@@ -148,6 +148,7 @@ class Incident:
 ```python
 import pandas as pd
 from datetime import datetime, date, timedelta
+import uuid
 from typing import List, Dict, Optional
 import json
 import os
@@ -222,7 +223,9 @@ class SafetyManager:
     ) -> Inspection:
         """Create new inspection"""
 
-        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if inspection_id in self.inspections:
+            raise ValueError(f"Inspection {inspection_id} already exists")
 
         # Get checklist for this type
         checklist = self.checklists.get(inspection_type.value, [])
@@ -284,7 +287,9 @@ class SafetyManager:
     ) -> Hazard:
         """Record a hazard finding"""
 
-        hazard_id = f"HAZ-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        hazard_id = f"HAZ-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if hazard_id in self.hazards:
+            raise ValueError(f"Hazard {hazard_id} already exists")
 
         if due_date is None:
             # Default due dates by severity
@@ -376,7 +381,9 @@ class SafetyManager:
     ) -> Incident:
         """Report safety incident"""
 
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if incident_id in self.incidents:
+            raise ValueError(f"Incident {incident_id} already exists")
 
         incident = Incident(
             incident_id=incident_id,

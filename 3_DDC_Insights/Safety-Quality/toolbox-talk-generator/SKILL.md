@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, date
+import uuid
 import random
 
 class HazardCategory(Enum):
@@ -269,7 +270,9 @@ class ToolboxTalkGenerator:
             # Generate generic talk
             template = self._generate_generic_template(category)
 
-        talk_id = f"TBT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        talk_id = f"TBT-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if talk_id in self.generated_talks:
+            raise ValueError(f"Toolbox talk {talk_id} already exists")
 
         content = {
             "intro": template["intro"],
