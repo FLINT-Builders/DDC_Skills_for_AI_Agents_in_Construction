@@ -402,6 +402,14 @@ class AssetRegistry:
         """Register new asset"""
         self.assets[asset.asset_id] = asset
 
+    def set_required_assets(self, asset_ids: List[str]):
+        """Set the required major-equipment inventory (asset_id values).
+
+        The handover checklist only marks asset registration complete when
+        every asset in this list is registered with warranty and maintenance data.
+        """
+        self.required_asset_ids = list(asset_ids)
+
     def import_from_bim(self, bim_data: List[Dict]):
         """Import assets from BIM model"""
         for item in bim_data:
@@ -664,16 +672,32 @@ def generate_handover_checklist(doc_manager: DocumentManager,
         ]
     })
 
-    # Assets category
-    warranty_report = asset_registry.get_warranty_report()
+    # Assets category: judged against the required inventory, never against
+    # whatever happens to be registered. No required list means nothing can
+    # be confirmed complete.
+    required_ids = getattr(asset_registry, 'required_asset_ids', None) or []
+    if isinstance(required_ids, str):
+        required_ids = [required_ids]
+    required_ids = list(dict.fromkeys(required_ids))
+    required_assets = {asset_id: asset_registry.assets.get(asset_id) for asset_id in required_ids}
+
+    unregistered = [i for i, a in required_assets.items() if a is None]
+    missing_warranty = [i for i, a in required_assets.items() if a is None or a.warranty_end is None]
+    missing_maintenance = [i for i, a in required_assets.items() if a is None or not a.maintenance_schedules]
+
+    has_inventory = len(required_ids) > 0
+    equipment_ok = has_inventory and not unregistered
+    warranty_ok = has_inventory and not missing_warranty
+    maintenance_ok = has_inventory and not missing_maintenance
 
     checklist['categories'].append({
         'name': 'Asset Registration',
-        'complete': warranty_report['total_assets'] > 0,
+        'complete': equipment_ok and warranty_ok and maintenance_ok,
+        'required_assets': len(required_ids),
         'items': [
-            {'item': 'All major equipment registered', 'status': 'complete' if warranty_report['total_assets'] > 0 else 'incomplete'},
-            {'item': 'Warranty information entered', 'status': 'complete' if warranty_report['with_warranty'] > 0 else 'incomplete'},
-            {'item': 'Maintenance schedules defined', 'status': 'complete' if any(a.maintenance_schedules for a in asset_registry.assets.values()) else 'incomplete'}
+            {'item': 'All major equipment registered', 'status': 'complete' if equipment_ok else 'incomplete', 'missing': unregistered},
+            {'item': 'Warranty information entered', 'status': 'complete' if warranty_ok else 'incomplete', 'missing': missing_warranty},
+            {'item': 'Maintenance schedules defined', 'status': 'complete' if maintenance_ok else 'incomplete', 'missing': missing_maintenance}
         ]
     })
 
