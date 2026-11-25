@@ -28,7 +28,7 @@ Systematic change order processing using CWICR data to calculate fair costs, doc
 
 ```python
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from enum import Enum
@@ -149,11 +149,9 @@ class CWICRChangeOrder:
                         original_qty: float,
                         revised_qty: float,
                         description: str = None) -> ChangeItem:
-        """Add item to change order."""
+        """Add item to a draft change order."""
 
-        co = self._change_orders.get(co_number)
-        if co is None:
-            raise ValueError(f"Change order {co_number} not found")
+        co = self._get_draft_change_order(co_number)
 
         unit_cost, unit = self.get_unit_cost(work_item_code)
 
@@ -182,16 +180,23 @@ class CWICRChangeOrder:
         )
 
         co.items.append(item)
-        self._recalculate_totals(co_number)
+        self._recalculate_totals(co)
 
         return item
 
-    def _recalculate_totals(self, co_number: str):
-        """Recalculate change order totals."""
+    def _get_draft_change_order(self, co_number: str) -> ChangeOrder:
+        """Resolve a change order once and require it to still be editable."""
         co = self._change_orders.get(co_number)
         if co is None:
-            return
+            raise ValueError(f"Change order {co_number} not found")
+        if co.status != ChangeStatus.DRAFT:
+            raise ValueError(
+                f"Change order {co_number} is {co.status.value}; only draft change orders can be edited"
+            )
+        return co
 
+    def _recalculate_totals(self, co: ChangeOrder):
+        """Recalculate change order totals."""
         direct_impact = sum(item.cost_impact for item in co.items)
         overhead = direct_impact * self.overhead_rate
         profit = (direct_impact + overhead) * self.profit_rate
@@ -202,16 +207,20 @@ class CWICRChangeOrder:
         co.total_impact = round(direct_impact + overhead + profit, 2)
 
     def set_schedule_impact(self, co_number: str, days: int):
-        """Set schedule impact for change order."""
-        co = self._change_orders.get(co_number)
-        if co:
-            co.schedule_impact_days = days
+        """Set schedule impact for a draft change order."""
+        co = self._get_draft_change_order(co_number)
+        co.schedule_impact_days = days
 
     def update_status(self, co_number: str, status: ChangeStatus):
-        """Update change order status."""
+        """Update change order status. Approved and rejected orders are final."""
         co = self._change_orders.get(co_number)
-        if co:
-            co.status = status
+        if co is None:
+            raise ValueError(f"Change order {co_number} not found")
+        if co.status in (ChangeStatus.APPROVED, ChangeStatus.REJECTED) and status != co.status:
+            raise ValueError(
+                f"Change order {co_number} is {co.status.value} and cannot be changed"
+            )
+        co.status = status
 
     def get_change_order(self, co_number: str) -> Optional[ChangeOrder]:
         """Get change order by number."""
