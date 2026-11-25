@@ -107,30 +107,62 @@ return [{json: {message}}];
 ```
 
 #### 5. Status Update Handler
-```javascript
-// Parse foreman response and update status
-const message = $node["Telegram Trigger"].json["message"]["text"];
-const replyTo = $node["Telegram Trigger"].json["message"]["reply_to_message"];
+Runs after the Telegram Trigger, the `Get Today Tasks` read and a `Foremen` read of the Foremen sheet:
+```json
+{
+  "name": "Foremen",
+  "type": "n8n-nodes-base.googleSheets",
+  "parameters": {
+    "operation": "read",
+    "sheetId": "YOUR_SHEET_ID",
+    "range": "Foremen!A:C",
+    "options": {}
+  }
+}
+```
 
+```javascript
+// Parse foreman response and update status of the replied-to task
+const incoming = $node["Telegram Trigger"].json["message"];
+const replyTo = incoming && incoming.reply_to_message;
+if (!replyTo || typeof incoming.text !== "string") return [];
+
+// Telegram message ids are per-chat counters, so the replied-to id is only
+// trusted for a task assigned to the sender's own chat.
+const senderChatId = String(incoming.chat.id);
+const isForeman = $("Foremen").all()
+  .some(foreman => String(foreman.json.chat_id) === senderChatId);
+if (!isForeman) return [];
+
+const matches = $("Get Today Tasks").all()
+  .filter(task => String(task.json.task_id) === String(replyTo.message_id));
+if (matches.length !== 1) return [];
+const task = matches[0].json;
+if (String(task.foreman_chat_id) !== senderChatId) return [];
+
+const message = incoming.text;
 let status = "в работе";
 let comment = "";
 
-if (message.toLowerCase().includes("выполнил")) {
-  status = "выполнено";
-} else if (message.toLowerCase().includes("не выполнил")) {
+if (message.toLowerCase().includes("не выполнил")) {
   status = "не выполнено";
   comment = message.replace(/не выполнил/i, "").trim();
+} else if (message.toLowerCase().includes("выполнил")) {
+  status = "выполнено";
 }
 
 return [{
   json: {
-    task_id: replyTo.message_id,
+    task_id: task.task_id,
+    foreman_chat_id: task.foreman_chat_id,
     status: status,
     comment: comment,
     updated_at: new Date().toISOString()
   }
 }];
 ```
+
+Write the result to the Tasks sheet row matched on `task_id`. Replies from chats that are not on the Foremen sheet, or that are not the task's `foreman_chat_id`, produce no update.
 
 ### Google Sheets Structure
 
@@ -173,7 +205,7 @@ npx n8n --tunnel
 ### For Foreman:
 1. Receive tasks via Telegram bot
 2. Reply to task message with status
-3. System updates Google Sheets automatically
+3. System updates Google Sheets automatically (only for tasks assigned to that foreman's chat)
 
 ### For Manager:
 1. View real-time status in Google Sheets
