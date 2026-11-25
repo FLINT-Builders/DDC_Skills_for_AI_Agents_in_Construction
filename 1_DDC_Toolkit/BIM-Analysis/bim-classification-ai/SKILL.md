@@ -34,6 +34,32 @@ from enum import Enum
 import re
 
 
+# Leading characters that Excel, LibreOffice, and Excel writers (openpyxl,
+# xlsxwriter) treat as the start of a formula, including full-width forms.
+FORMULA_MARKERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe(value: Any) -> Any:
+    """Quote text that a spreadsheet would otherwise evaluate as a formula.
+
+    Element names, categories and IDs come from whoever authored the model,
+    so every string written to a workbook must pass through here.
+    """
+    if isinstance(value, str) and (
+        value[:1] in ('\t', '\r', '\n') or value.lstrip()[:1] in FORMULA_MARKERS
+    ):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of df with every string cell passed through excel_safe."""
+    safe = df.copy()
+    for column in safe.columns:
+        safe[column] = safe[column].map(excel_safe)
+    return safe
+
+
 class ClassificationSystem(Enum):
     """Classification standards."""
     UNIFORMAT = "uniformat"
@@ -282,7 +308,7 @@ class BIMClassificationAI:
                 'confidence': result.suggested_codes[0][1] if result.suggested_codes else 0
             })
 
-        return pd.DataFrame(results)
+        return excel_safe_frame(pd.DataFrame(results))
 
     def get_summary(self) -> Dict[str, Any]:
         """Get classification summary."""
@@ -320,7 +346,7 @@ class BIMClassificationAI:
 
             data.append(row)
 
-        return pd.DataFrame(data)
+        return excel_safe_frame(pd.DataFrame(data))
 ```
 
 ## Quick Start
