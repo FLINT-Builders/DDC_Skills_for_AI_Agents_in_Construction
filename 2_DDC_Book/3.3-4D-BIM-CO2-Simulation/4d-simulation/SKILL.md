@@ -71,16 +71,23 @@ class ScheduleElementLinker:
                      e.g., {'Wall': 'Structural Walls', 'Slab': 'Floor Construction'}
         """
         links = []
+        activities = self.schedule['Activity'].fillna('').astype(str)
 
         for category, activity_name in mapping.items():
+            activity_name = '' if pd.isna(activity_name) else str(activity_name)
+            if not activity_name.strip():
+                continue
+
             # Find elements of this category
             category_elements = self.elements[
                 self.elements['Category'] == category
             ]['ElementId'].tolist()
 
-            # Find matching activity
+            # Activity names are matched as literal text, never as a regex
             activity = self.schedule[
-                self.schedule['Activity'].str.contains(activity_name, case=False)
+                activities.str.contains(
+                    activity_name, case=False, regex=False, na=False
+                )
             ]
 
             if not activity.empty and category_elements:
@@ -98,16 +105,19 @@ class ScheduleElementLinker:
 
     def auto_link_by_level(self):
         """Auto-link elements based on level and construction sequence"""
-        # Get unique levels in order
-        levels = sorted(self.elements['Level'].unique())
+        # Level names come from the BIM model, so treat them as untrusted text
+        elements = self.elements[self.elements['Level'].notna()]
+        level_names = elements['Level'].astype(str)
+        levels = sorted(level_names[level_names.str.strip() != ''].unique())
+        activities = self.schedule['Activity'].fillna('').astype(str)
 
         links = []
         for i, level in enumerate(levels):
-            level_elements = self.elements[self.elements['Level'] == level]
+            level_elements = elements[level_names == level]
 
-            # Find activity for this level
+            # Level names are matched as literal text, never as a regex
             level_activity = self.schedule[
-                self.schedule['Activity'].str.contains(level, case=False)
+                activities.str.contains(level, case=False, regex=False, na=False)
             ]
 
             if not level_activity.empty:
