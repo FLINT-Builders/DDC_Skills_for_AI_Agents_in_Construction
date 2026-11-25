@@ -28,6 +28,24 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# Leading characters that make Excel, LibreOffice or Sheets treat a cell as a
+# formula (including full-width variants some locales accept).
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Store field-supplied text as literal text, never as a formula."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in ('\t', '\r', '\n') or value.lstrip().startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _excel_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame([{k: _excel_safe(v) for k, v in row.items()} for row in rows])
+
+
 class DocumentType(Enum):
     DRAWING = "drawing"
     SPECIFICATION = "specification"
@@ -199,7 +217,7 @@ class AsBuiltDocumentManager:
                 'Markups': len(d.markups),
                 'Verified By': d.verified_by
             } for d in self.documents.values()]
-            pd.DataFrame(doc_data).to_excel(writer, sheet_name='Register', index=False)
+            _excel_frame(doc_data).to_excel(writer, sheet_name='Register', index=False)
 
             # Markups
             markup_data = []
@@ -214,7 +232,7 @@ class AsBuiltDocumentManager:
                         'Status': m.status.value
                     })
             if markup_data:
-                pd.DataFrame(markup_data).to_excel(writer, sheet_name='Markups', index=False)
+                _excel_frame(markup_data).to_excel(writer, sheet_name='Markups', index=False)
 
         return output_path
 ```
