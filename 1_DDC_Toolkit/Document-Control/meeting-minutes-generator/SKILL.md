@@ -51,6 +51,19 @@ class Priority(Enum):
     LOW = "low"
 
 
+# Leading characters that spreadsheet applications or Excel writers treat as
+# the start of a formula ("{" covers XlsxWriter's "{=...}" array formulas).
+FORMULA_MARKERS = ("=", "+", "-", "@", "{", "\uff1d", "\uff0b", "\uff0d", "\uff20")
+
+
+def excel_text(value: Any) -> Any:
+    """Return value so a spreadsheet stores it as text, never as a formula."""
+    if (isinstance(value, str) and len(value) > 1
+            and value.lstrip(" \t\r\n").startswith(FORMULA_MARKERS)):
+        return "'" + value
+    return value
+
+
 @dataclass
 class Attendee:
     name: str
@@ -288,6 +301,7 @@ class MeetingMinutesGenerator:
             'Status': a.status.value,
             'Meeting': a.created_meeting
         } for a in self.all_actions.values()]
+        data = [{k: excel_text(v) for k, v in row.items()} for row in data]
 
         df = pd.DataFrame(data)
         df.to_excel(output_path, index=False)
