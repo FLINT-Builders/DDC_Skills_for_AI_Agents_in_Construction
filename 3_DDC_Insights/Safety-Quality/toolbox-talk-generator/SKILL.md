@@ -37,6 +37,7 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, date
 import random
+import uuid
 
 class HazardCategory(Enum):
     FALL_PROTECTION = "fall_protection"
@@ -259,6 +260,21 @@ class ToolboxTalkGenerator:
         self.generated_talks: Dict[str, ToolboxTalk] = {}
         self.talk_records: List[TalkRecord] = []
 
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
+
     def generate_talk(self, category: HazardCategory,
                      language: str = "en",
                      custom_points: List[str] = None) -> ToolboxTalk:
@@ -268,8 +284,6 @@ class ToolboxTalkGenerator:
         if not template:
             # Generate generic talk
             template = self._generate_generic_template(category)
-
-        talk_id = f"TBT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
         content = {
             "intro": template["intro"],
@@ -282,19 +296,19 @@ class ToolboxTalkGenerator:
         if custom_points:
             key_points.extend(custom_points)
 
-        talk = ToolboxTalk(
-            id=talk_id,
-            title=template["title"],
-            category=category,
-            duration_minutes=10,
-            content=content,
-            key_points=key_points,
-            discussion_questions=template.get("discussion", []),
-            language=language
+        return self._insert_new(
+            self.generated_talks, "TBT",
+            lambda talk_id: ToolboxTalk(
+                id=talk_id,
+                title=template["title"],
+                category=category,
+                duration_minutes=10,
+                content=content,
+                key_points=key_points,
+                discussion_questions=template.get("discussion", []),
+                language=language
+            )
         )
-
-        self.generated_talks[talk_id] = talk
-        return talk
 
     def _generate_generic_template(self, category: HazardCategory) -> Dict:
         """Generate generic template for unmapped categories."""

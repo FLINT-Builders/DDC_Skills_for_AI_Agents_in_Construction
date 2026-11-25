@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from enum import Enum
+import uuid
 
 class ClaimType(Enum):
     DELAY = "delay"
@@ -159,21 +160,37 @@ class ClaimsDocumentor:
         self.contract_date = contract_date
         self.claims: Dict[str, Claim] = {}
 
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
+
     def create_claim(self, claim_type: ClaimType, title: str,
                     description: str, event_date: datetime,
                     responsible_party: str) -> Claim:
         """Create new claim."""
-        claim_id = f"CLM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-        claim = Claim(
-            id=claim_id,
-            claim_type=claim_type,
-            title=title,
-            description=description,
-            status=ClaimStatus.DRAFT,
-            event_date=event_date,
-            discovery_date=datetime.now(),
-            responsible_party=responsible_party
+        claim = self._insert_new(
+            self.claims, "CLM",
+            lambda claim_id: Claim(
+                id=claim_id,
+                claim_type=claim_type,
+                title=title,
+                description=description,
+                status=ClaimStatus.DRAFT,
+                event_date=event_date,
+                discovery_date=datetime.now(),
+                responsible_party=responsible_party
+            )
         )
 
         # Add default notice requirements
@@ -187,7 +204,6 @@ class ClaimsDocumentor:
             )
             claim.notice_requirements.append(notice)
 
-        self.claims[claim_id] = claim
         return claim
 
     def record_notice_sent(self, claim_id: str, notice_type: str,

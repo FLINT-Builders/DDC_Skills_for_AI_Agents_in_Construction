@@ -36,6 +36,7 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, timedelta
 import json
+import uuid
 
 class IncidentType(Enum):
     NEAR_MISS = "near_miss"
@@ -141,6 +142,21 @@ class IncidentManager:
         self.incidents: Dict[str, Incident] = {}
         self.corrective_actions: Dict[str, CorrectiveAction] = {}
 
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
+
     def report_incident(self, incident_type: IncidentType,
                        category: IncidentCategory,
                        date_time: datetime,
@@ -152,24 +168,25 @@ class IncidentManager:
                        reported_by: str,
                        injured_person: Dict = None) -> Incident:
         """Report new incident."""
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
         injured = None
         if injured_person:
             injured = Person(**injured_person)
 
-        incident = Incident(
-            id=incident_id,
-            incident_type=incident_type,
-            category=category,
-            date_time=date_time,
-            location=location,
-            project_id=project_id,
-            project_name=project_name,
-            description=description,
-            immediate_actions=immediate_actions,
-            reported_by=reported_by,
-            injured_person=injured
+        incident = self._insert_new(
+            self.incidents, "INC",
+            lambda incident_id: Incident(
+                id=incident_id,
+                incident_type=incident_type,
+                category=category,
+                date_time=date_time,
+                location=location,
+                project_id=project_id,
+                project_name=project_name,
+                description=description,
+                immediate_actions=immediate_actions,
+                reported_by=reported_by,
+                injured_person=injured
+            )
         )
 
         # Auto-flag OSHA recordable
@@ -178,7 +195,6 @@ class IncidentManager:
                             IncidentType.FATALITY]:
             incident.osha_recordable = True
 
-        self.incidents[incident_id] = incident
         return incident
 
     def add_witness(self, incident_id: str, witness: Dict) -> Incident:
@@ -234,17 +250,18 @@ class IncidentManager:
         if incident_id not in self.incidents:
             raise ValueError(f"Incident {incident_id} not found")
 
-        action_id = f"CA-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        action = CorrectiveAction(
-            id=action_id,
-            description=description,
-            assigned_to=assigned_to,
-            due_date=datetime.now() + timedelta(days=due_days)
+        action = self._insert_new(
+            self.corrective_actions, "CA",
+            lambda action_id: CorrectiveAction(
+                id=action_id,
+                description=description,
+                assigned_to=assigned_to,
+                due_date=datetime.now() + timedelta(days=due_days)
+            )
         )
 
         self.incidents[incident_id].corrective_actions.append(action)
         self.incidents[incident_id].status = InvestigationStatus.CORRECTIVE_ACTIONS_ASSIGNED
-        self.corrective_actions[action_id] = action
         return action
 
     def complete_corrective_action(self, action_id: str,
