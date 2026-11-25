@@ -145,13 +145,15 @@ class ContractClauseAnalyzer:
     def _split_into_sections(self, text: str) -> List[Dict[str, str]]:
         """Split contract into sections."""
         sections = []
-        # Simple split by numbered sections
-        pattern = r'(\d+\.[\d\.]*\s+[A-Z][^\.]+)'
-        parts = re.split(pattern, text)
+        # Simple split by numbered sections. Headings must start a line and the
+        # number is bounded so long digit runs cannot cause quadratic scans.
+        number = r'\d{1,3}\.[\d\.]{0,12}'
+        pattern = re.compile(rf'^[ \t]*({number}[ \t]+[A-Z][^\.]+)', re.MULTILINE)
+        parts = pattern.split(text)
 
         current_title = ""
         for i, part in enumerate(parts):
-            if re.match(r'\d+\.[\d\.]*\s+[A-Z]', part):
+            if re.match(rf'{number}[ \t]+[A-Z]', part):
                 current_title = part.strip()
             elif part.strip() and current_title:
                 sections.append({

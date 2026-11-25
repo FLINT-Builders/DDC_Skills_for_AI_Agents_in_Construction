@@ -312,9 +312,13 @@ def parse_specification_pdf(pdf_path):
             if text:
                 full_text += text + "\n"
 
-    # Parse sections (common spec format)
-    section_pattern = r'(\d+\.\d+(?:\.\d+)?)\s+([A-Z][^\n]+)'
-    sections = re.findall(section_pattern, full_text)
+    # Parse sections (common spec format). Anchored to line starts with bounded
+    # digit runs so long digit sequences in the text cannot cause quadratic scans.
+    section_pattern = re.compile(
+        r'^[ \t]*(\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)[ \t]+([A-Z][^\n]+)',
+        re.MULTILINE,
+    )
+    sections = section_pattern.findall(full_text)
 
     for num, title in sections:
         specs.append({
