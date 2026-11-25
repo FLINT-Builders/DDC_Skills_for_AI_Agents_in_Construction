@@ -150,6 +150,21 @@ def split_drawing_package(pdf_path: str, output_dir: str) -> list:
 # Example: Process RFI and add to tracking spreadsheet
 import pandas as pd
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 # Extract RFI data
 rfi_data = extract_rfi_data("RFI_045.pdf")
 
@@ -161,7 +176,7 @@ new_row = pd.DataFrame([rfi_data])
 tracker = pd.concat([tracker, new_row], ignore_index=True)
 
 # Save updated tracker
-tracker.to_excel("RFI_Log.xlsx", index=False)
+escape_formulas(tracker).to_excel("RFI_Log.xlsx", index=False)
 ```
 
 ## Dependencies

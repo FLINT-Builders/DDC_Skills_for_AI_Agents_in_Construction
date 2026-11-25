@@ -96,6 +96,21 @@ export to Excel with formatting"
 import pdfplumber
 import pandas as pd
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def pdf_to_dataframe(pdf_path):
     """Extract tables from PDF file"""
     all_tables = []
@@ -113,7 +128,7 @@ def pdf_to_dataframe(pdf_path):
 
 # Usage
 df = pdf_to_dataframe("construction_spec.pdf")
-df.to_excel("extracted_data.xlsx", index=False)
+escape_formulas(df).to_excel("extracted_data.xlsx", index=False)
 ```
 
 ### 2. Process BIM Element Data
