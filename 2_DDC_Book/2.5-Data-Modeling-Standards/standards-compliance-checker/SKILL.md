@@ -27,6 +27,25 @@ from enum import Enum
 import re
 
 
+def is_missing(value: Any) -> bool:
+    """True for None, "" and NaN-like markers (float/numpy NaN, NaT, pandas NA).
+
+    pandas turns blank Excel/CSV cells into NaN, which is not equal to "" or None.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value == ""
+    try:
+        return bool(value != value)
+    except (TypeError, ArithmeticError):
+        # pandas NA has no truth value; Decimal('sNaN') refuses to compare
+        return True
+    except ValueError:
+        # array-like values have no single truth value and are not a missing marker
+        return False
+
+
 class Standard(Enum):
     ISO_19650 = "iso_19650"
     IFC = "ifc"
@@ -157,7 +176,7 @@ class StandardsComplianceChecker:
         value = data.get(field)
 
         # Required check
-        if rule.get('required') and (value is None or value == ''):
+        if rule.get('required') and is_missing(value):
             return ComplianceIssue(
                 rule_id=rule['id'],
                 rule_name=rule['name'],
