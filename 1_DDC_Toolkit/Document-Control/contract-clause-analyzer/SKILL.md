@@ -142,27 +142,50 @@ class ContractClauseAnalyzer:
             key_amounts=key_amounts
         )
 
+    HEADING_PATTERN = re.compile(r'(?:^[ \t]*|(?<=[.;:])[ \t]+)(\d+\.[\d.]*)[ \t]+(?=[A-Z])', re.MULTILINE)
+    SHORT_TITLE_PATTERN = re.compile(r'([^.]{1,50})(?:\.(?:\s+(.*))?)?$')
+
     def _split_into_sections(self, text: str) -> List[Dict[str, str]]:
-        """Split contract into sections."""
+        """Split contract into sections at numbered headings.
+
+        Every character of the contract after a clause number ends up in some
+        section's 'content', which is what gets analyzed: text before the first
+        heading becomes its own section, and the title stays part of the content.
+        'title' is only a short display label and 'text' is the body after it.
+        """
         sections = []
-        # Simple split by numbered sections
-        pattern = r'(\d+\.[\d\.]*\s+[A-Z][^\.]+)'
-        parts = re.split(pattern, text)
+        headings = list(self.HEADING_PATTERN.finditer(text))
 
-        current_title = ""
-        for i, part in enumerate(parts):
-            if re.match(r'\d+\.[\d\.]*\s+[A-Z]', part):
-                current_title = part.strip()
-            elif part.strip() and current_title:
-                sections.append({
-                    'title': current_title,
-                    'text': part.strip()
-                })
-                current_title = ""
+        preamble = text[:headings[0].start()] if headings else text
+        if preamble.strip():
+            sections.append({
+                'title': 'Preamble' if headings else 'Contract Text',
+                'text': preamble.strip(),
+                'content': preamble
+            })
 
-        # If no sections found, treat whole text as one
-        if not sections and text.strip():
-            sections.append({'title': 'Contract Text', 'text': text.strip()})
+        for idx, match in enumerate(headings):
+            end = headings[idx + 1].start() if idx + 1 < len(headings) else len(text)
+            number = match.group(1).rstrip('.')
+            clause = text[match.end():end]
+            line, _, rest = clause.partition('\n')
+            line = line.strip()
+
+            # Only a short label on the heading line counts as a title; a long
+            # opening sentence stays in the body.
+            short = self.SHORT_TITLE_PATTERN.fullmatch(line)
+            if short:
+                title = short.group(1).strip()
+                body = f"{short.group(2) or ''}\n{rest}".strip()
+            else:
+                title = f"Section {number}"
+                body = f"{line}\n{rest}".strip()
+
+            sections.append({
+                'title': title,
+                'text': body,
+                'content': clause
+            })
 
         return sections
 
@@ -170,25 +193,26 @@ class ContractClauseAnalyzer:
         """Analyze single clause."""
         text = section.get('text', '')
         title = section.get('title', '')
-        text_lower = text.lower()
+        content = ' '.join(section.get('content', text).split())
+        content_lower = content.lower()
 
         # Determine clause type
-        clause_type = self._determine_type(text_lower)
+        clause_type = self._determine_type(content_lower)
 
         # Assess risk level
-        risk_level = self._assess_risk(text_lower)
+        risk_level = self._assess_risk(content_lower)
 
         # Extract key terms
-        key_terms = self._extract_key_terms(text)
+        key_terms = self._extract_key_terms(content)
 
         # Extract obligations
-        obligations = self._extract_obligations(text)
+        obligations = self._extract_obligations(content)
 
         # Extract dates
-        deadlines = self._extract_dates(text)
+        deadlines = self._extract_dates(content)
 
         # Extract amounts
-        amounts = self._extract_amounts(text)
+        amounts = self._extract_amounts(content)
 
         return ContractClause(
             clause_id=clause_id,
