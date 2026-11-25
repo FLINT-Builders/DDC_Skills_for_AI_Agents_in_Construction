@@ -183,6 +183,33 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 from collections import defaultdict
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "{")
+
+
+def excel_safe(value):
+    """Keep untrusted text from being stored or opened as a spreadsheet formula."""
+    if not isinstance(value, str):
+        return value
+    lead = value.lstrip()[:1]
+    if lead not in _FORMULA_PREFIXES:
+        return value
+    if lead in ("+", "-"):
+        try:
+            float(value)
+            return value
+        except ValueError:
+            pass
+    return "'" + value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe to every cell; call on every DataFrame before to_excel."""
+    safe = df.copy()
+    for column in safe.columns:
+        safe[column] = safe[column].map(excel_safe)
+    return safe
+
+
 class PunchListManager:
     """Construction punch list management system"""
 
@@ -568,7 +595,7 @@ ITEMS REQUIRING ACTION
                 'Photo After': item.photo_after
             })
 
-        df = pd.DataFrame(records)
+        df = excel_safe_frame(pd.DataFrame(records))
         df.to_excel(output_path, index=False)
         return output_path
 
