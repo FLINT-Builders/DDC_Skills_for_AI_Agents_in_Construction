@@ -69,10 +69,18 @@ class CriticalPathAnalyzer:
     """Analyze project critical path."""
 
     NEAR_CRITICAL_THRESHOLD = 5  # days
+    MAX_ACTIVITIES = 250_000
 
     def __init__(self, project_start: date):
         self.project_start = project_start
         self.activities: Dict[str, Activity] = {}
+
+    def _check_network_size(self, count: int):
+        if count > self.MAX_ACTIVITIES:
+            raise ValueError(
+                f"Schedule has {count} activities, which exceeds the configured "
+                f"limit of {self.MAX_ACTIVITIES} (MAX_ACTIVITIES)"
+            )
 
     def add_activity(self,
                      activity_id: str,
@@ -80,6 +88,9 @@ class CriticalPathAnalyzer:
                      duration: int,
                      predecessors: List[str] = None):
         """Add activity to network."""
+
+        if activity_id not in self.activities:
+            self._check_network_size(len(self.activities) + 1)
 
         self.activities[activity_id] = Activity(
             activity_id=activity_id,
@@ -162,23 +173,27 @@ class CriticalPathAnalyzer:
     def _topological_sort(self) -> List[str]:
         """Topological sort of activities."""
 
-        visited = set()
-        result = []
+        self._check_network_size(len(self.activities))
 
-        def visit(activity_id: str):
-            if activity_id in visited:
-                return
-            visited.add(activity_id)
+        visited: Set[str] = set()
+        result: List[str] = []
 
-            activity = self.activities.get(activity_id)
-            if activity:
-                for pred in activity.predecessors:
-                    if pred in self.activities:
-                        visit(pred)
-                result.append(activity_id)
-
-        for activity_id in self.activities:
-            visit(activity_id)
+        # Explicit stack: predecessor chains can be longer than Python's recursion limit.
+        for root_id in self.activities:
+            if root_id in visited:
+                continue
+            visited.add(root_id)
+            stack = [(root_id, iter(self.activities[root_id].predecessors))]
+            while stack:
+                activity_id, pending = stack[-1]
+                for pred in pending:
+                    if pred in self.activities and pred not in visited:
+                        visited.add(pred)
+                        stack.append((pred, iter(self.activities[pred].predecessors)))
+                        break
+                else:
+                    stack.pop()
+                    result.append(activity_id)
 
         return result
 
