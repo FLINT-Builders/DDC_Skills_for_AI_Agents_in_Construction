@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime
+import uuid
 import json
 
 class InspectionType(Enum):
@@ -171,7 +172,9 @@ class SafetyInspectionManager:
                          location: str, inspector: str,
                          weather: str = "", workers: int = 0) -> SafetyInspection:
         """Create new inspection from template."""
-        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if inspection_id in self.inspections:
+            raise ValueError(f"Inspection {inspection_id} already exists")
 
         inspection = SafetyInspection(
             id=inspection_id,

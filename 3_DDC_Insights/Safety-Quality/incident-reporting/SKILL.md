@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, timedelta
+import uuid
 import json
 
 class IncidentType(Enum):
@@ -152,7 +153,9 @@ class IncidentManager:
                        reported_by: str,
                        injured_person: Dict = None) -> Incident:
         """Report new incident."""
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if incident_id in self.incidents:
+            raise ValueError(f"Incident {incident_id} already exists")
 
         injured = None
         if injured_person:
@@ -234,7 +237,9 @@ class IncidentManager:
         if incident_id not in self.incidents:
             raise ValueError(f"Incident {incident_id} not found")
 
-        action_id = f"CA-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        action_id = f"CA-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+        if action_id in self.corrective_actions:
+            raise ValueError(f"Corrective action {action_id} already exists")
         action = CorrectiveAction(
             id=action_id,
             description=description,
