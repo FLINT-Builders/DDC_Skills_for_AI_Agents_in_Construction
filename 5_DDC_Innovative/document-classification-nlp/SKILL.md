@@ -395,6 +395,14 @@ class ConstructionInfoExtractor:
 ## Processing Pipeline
 
 ```python
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def excel_safe(value):
+    """Store document text as text: a leading apostrophe stops Excel evaluating it."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
 def process_document_batch(documents: List[str], output_path: str):
     """Process and classify a batch of documents"""
     classifier = ConstructionDocumentClassifier()
@@ -423,7 +431,7 @@ def process_document_batch(documents: List[str], output_path: str):
         })
 
     df = pd.DataFrame(results)
-    df.to_excel(output_path, index=False)
+    df.apply(lambda col: col.map(excel_safe)).to_excel(output_path, index=False, engine='openpyxl')
 
     return df
 ```
