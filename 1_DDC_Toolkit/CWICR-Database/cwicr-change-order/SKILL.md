@@ -34,6 +34,23 @@ from datetime import datetime, date
 from enum import Enum
 
 
+_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def _excel_safe_text(value: Any) -> Any:
+    """Prefix formula-like text so spreadsheets show it instead of evaluating it."""
+    if isinstance(value, str) and (value[:1] in _FORMULA_TRIGGERS
+                                   or value.lstrip()[:1] in _FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+
+def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize formula-like text in cells and labels before to_excel."""
+    df = df.apply(lambda column: column.map(_excel_safe_text))
+    return df.rename(index=_excel_safe_text, columns=_excel_safe_text)
+
+
 class ChangeType(Enum):
     """Types of changes."""
     ADDITION = "addition"        # New work added
@@ -331,7 +348,7 @@ class CWICRChangeOrder:
                 'Description': co.description,
                 'Schedule Impact (days)': co.schedule_impact_days
             }])
-            header_df.to_excel(writer, sheet_name='Summary', index=False)
+            _excel_safe(header_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # Items
             items_df = pd.DataFrame([
@@ -350,7 +367,7 @@ class CWICRChangeOrder:
                 }
                 for item in co.items
             ])
-            items_df.to_excel(writer, sheet_name='Items', index=False)
+            _excel_safe(items_df).to_excel(writer, sheet_name='Items', index=False)
 
             # Totals
             totals_df = pd.DataFrame([{
@@ -359,7 +376,7 @@ class CWICRChangeOrder:
                 f'Profit ({self.profit_rate:.0%})': co.profit_markup,
                 'Total Impact': co.total_impact
             }])
-            totals_df.to_excel(writer, sheet_name='Totals', index=False)
+            _excel_safe(totals_df).to_excel(writer, sheet_name='Totals', index=False)
 
         return output_path
 ```
