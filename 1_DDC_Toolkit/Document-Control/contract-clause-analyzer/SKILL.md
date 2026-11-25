@@ -103,6 +103,12 @@ class ContractClauseAnalyzer:
         ClauseType.FORCE_MAJEURE: ['force majeure', 'act of god', 'unforeseen'],
     }
 
+    # Contract text is untrusted: every repeat is bounded and the heading is
+    # anchored to a line start so a failed match cannot rescan the input.
+    SECTION_HEADING = re.compile(
+        r'(?m)^[ \t]{0,8}(\d{1,4}\.(?:\d{1,4}\.){0,6}\d{0,4}[ \t]{1,8}[A-Z][^.\n]{0,200})'
+    )
+
     def __init__(self):
         self.clauses: List[ContractClause] = []
 
@@ -145,13 +151,12 @@ class ContractClauseAnalyzer:
     def _split_into_sections(self, text: str) -> List[Dict[str, str]]:
         """Split contract into sections."""
         sections = []
-        # Simple split by numbered sections
-        pattern = r'(\d+\.[\d\.]*\s+[A-Z][^\.]+)'
-        parts = re.split(pattern, text)
+        # Simple split by numbered sections; odd indices are the captured headings
+        parts = self.SECTION_HEADING.split(text)
 
         current_title = ""
         for i, part in enumerate(parts):
-            if re.match(r'\d+\.[\d\.]*\s+[A-Z]', part):
+            if i % 2 == 1:
                 current_title = part.strip()
             elif part.strip() and current_title:
                 sections.append({
@@ -268,7 +273,7 @@ class ContractClauseAnalyzer:
         """Extract monetary amounts."""
         patterns = [
             r'\$[\d,]+(?:\.\d{2})?',
-            r'\b\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars|USD)\b',
+            r'\b\d{1,15}(?:,\d{3}){0,6}(?:\.\d{2})?\s{0,3}(?:dollars|USD)\b',
             r'\b\d+(?:\.\d+)?%\b'
         ]
         amounts = []
