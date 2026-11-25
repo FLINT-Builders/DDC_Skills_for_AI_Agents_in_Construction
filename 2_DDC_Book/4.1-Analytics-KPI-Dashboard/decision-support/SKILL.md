@@ -29,6 +29,24 @@ from enum import Enum
 import math
 
 
+# Leading characters that make Excel, LibreOffice or a CSV import treat a cell as a formula.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe_text(value: Any) -> Any:
+    """Force caller-supplied strings to stay text when written to a spreadsheet."""
+    if isinstance(value, str) and value.lstrip(' ').startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe_text to every cell and column header of a DataFrame."""
+    safe = df.apply(lambda column: column.map(excel_safe_text))
+    safe.columns = [excel_safe_text(c) for c in df.columns]
+    return safe
+
+
 class DecisionType(Enum):
     VENDOR_SELECTION = "vendor_selection"
     METHOD_SELECTION = "method_selection"
@@ -314,11 +332,11 @@ class DecisionSupportSystem:
                 'Score': rec['recommendation']['score'],
                 'Confidence %': rec['recommendation']['confidence']
             }])
-            rec_df.to_excel(writer, sheet_name='Recommendation', index=False)
+            excel_safe_frame(rec_df).to_excel(writer, sheet_name='Recommendation', index=False)
 
             # All rankings
             rankings_df = pd.DataFrame(rec['all_rankings'])
-            rankings_df.to_excel(writer, sheet_name='Rankings', index=False)
+            excel_safe_frame(rankings_df).to_excel(writer, sheet_name='Rankings', index=False)
 
             # Detailed scores
             normalized = self.normalize_scores()
@@ -330,7 +348,7 @@ class DecisionSupportSystem:
                     row[f"{criterion.name} (Norm)"] = normalized[alt_id].get(cid, 0)
                 details.append(row)
             details_df = pd.DataFrame(details)
-            details_df.to_excel(writer, sheet_name='Detailed Scores', index=False)
+            excel_safe_frame(details_df).to_excel(writer, sheet_name='Detailed Scores', index=False)
 
             # Criteria
             criteria_df = pd.DataFrame([{
@@ -340,7 +358,7 @@ class DecisionSupportSystem:
                 'Higher is Better': c.higher_is_better,
                 'Unit': c.unit
             } for c in self.criteria.values()])
-            criteria_df.to_excel(writer, sheet_name='Criteria', index=False)
+            excel_safe_frame(criteria_df).to_excel(writer, sheet_name='Criteria', index=False)
 
         return output_path
 ```
