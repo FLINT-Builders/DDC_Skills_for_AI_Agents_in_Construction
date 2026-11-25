@@ -160,8 +160,17 @@ tracker = pd.read_excel("RFI_Log.xlsx")
 new_row = pd.DataFrame([rfi_data])
 tracker = pd.concat([tracker, new_row], ignore_index=True)
 
-# Save updated tracker
-tracker.to_excel("RFI_Log.xlsx", index=False)
+# Save updated tracker. RFI text comes from submitted PDFs: prefix anything
+# Excel would read as a formula with an apostrophe so it is stored as text.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def excel_safe(value):
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+tracker = tracker.apply(lambda col: col.map(excel_safe))
+tracker.to_excel("RFI_Log.xlsx", index=False, engine='openpyxl')
 ```
 
 ## Dependencies

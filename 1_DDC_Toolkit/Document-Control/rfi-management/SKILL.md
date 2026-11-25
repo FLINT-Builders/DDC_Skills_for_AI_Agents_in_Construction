@@ -116,6 +116,21 @@ from dataclasses import dataclass, field
 from enum import Enum
 import uuid
 
+# Leading characters that spreadsheet apps treat as the start of a formula.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def excel_safe(value):
+    """Store RFI text as text: a leading apostrophe stops Excel evaluating it."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+def from_excel(value):
+    """Undo excel_safe so text does not gain an apostrophe on every save."""
+    if isinstance(value, str) and value.startswith("'") and value[1:].startswith(FORMULA_PREFIXES):
+        return value[1:]
+    return value
+
 class RFIStatus(Enum):
     DRAFT = "Draft"
     OPEN = "Open"
@@ -190,8 +205,8 @@ class RFIManager:
                 rfi = RFI(
                     rfi_number=row['rfi_number'],
                     project_id=row['project_id'],
-                    subject=row['subject'],
-                    question=row['question'],
+                    subject=from_excel(row['subject']),
+                    question=from_excel(row['question']),
                     status=RFIStatus(row['status']),
                     priority=RFIPriority(row.get('priority', 'Medium'))
                 )
@@ -229,8 +244,10 @@ class RFIManager:
                 'change_order_ref': rfi.change_order_ref
             })
 
+        # RFI text comes from subcontractors; never let it be written as a formula.
+        records = [{k: excel_safe(v) for k, v in r.items()} for r in records]
         df = pd.DataFrame(records)
-        df.to_excel(self.storage_path, index=False)
+        df.to_excel(self.storage_path, index=False, engine='openpyxl')
 
     def _get_next_number(self) -> str:
         """Generate next RFI number"""
