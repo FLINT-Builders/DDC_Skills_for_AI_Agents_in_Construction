@@ -30,6 +30,7 @@ Process construction payment applications from creation through approval. Valida
 ## Technical Implementation
 
 ```python
+import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
@@ -248,10 +249,13 @@ class PaymentApplicationProcessor:
         if not item:
             raise ValueError(f"Line item {line_number} not found")
 
+        work = item.current_completed
+        stored = item.materials_stored
         if current_completed is not None:
-            item.current_completed = current_completed
+            work = self._validate_amount(line_number, "current_completed", current_completed)
         if materials_stored is not None:
-            item.materials_stored = materials_stored
+            stored = self._validate_amount(line_number, "materials_stored", materials_stored)
+        self._apply_capped_progress(item, work, stored)
 
         item.calculate(pay_app.work_retainage_rate)
 
@@ -272,17 +276,36 @@ class PaymentApplicationProcessor:
         if not item:
             raise ValueError(f"Line item {line_number} not found")
 
+        percent_complete = min(
+            self._validate_amount(line_number, "percent_complete", percent_complete), 100.0)
+
         # Calculate current completed from percentage
         total_earned = item.scheduled_value * (percent_complete / 100)
-        item.current_completed = total_earned - item.previous_completed - item.materials_stored
-
-        if item.current_completed < 0:
-            item.current_completed = 0
+        work = max(0.0, total_earned - item.previous_completed - item.materials_stored)
+        self._apply_capped_progress(item, work, item.materials_stored)
 
         item.calculate(pay_app.work_retainage_rate)
         self._calculate_totals(pay_app)
 
         return item
+
+    @staticmethod
+    def _validate_amount(line_number: str, name: str, value: float) -> float:
+        """Reject negative or non-finite progress values."""
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Line item {line_number}: {name} must be a number, got {value!r}")
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError(f"Line item {line_number}: {name} must be a finite, non-negative value")
+        return amount
+
+    @staticmethod
+    def _apply_capped_progress(item: SOVLineItem, work: float, stored: float):
+        """Cap work, then stored materials, so the line never exceeds its scheduled value."""
+        remaining = max(0.0, item.scheduled_value - item.previous_completed)
+        item.current_completed = min(work, remaining)
+        item.materials_stored = min(stored, remaining - item.current_completed)
 
     def _calculate_totals(self, pay_app: PaymentApplication):
         """Calculate pay app totals."""
