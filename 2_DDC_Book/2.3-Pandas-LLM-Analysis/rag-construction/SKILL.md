@@ -17,7 +17,7 @@ Based on DDC methodology (Chapter 2.3), this skill builds Retrieval-Augmented Ge
 ```python
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Any, Callable
+from typing import List, Dict, Optional, Any, Callable, Tuple
 from datetime import datetime
 import json
 import hashlib
@@ -115,18 +115,26 @@ class TextChunker:
 
     def _chunk_fixed_size(self, document: Document) -> List[DocumentChunk]:
         """Chunk by fixed character size with overlap"""
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError(
+                "fixed-size chunking requires 0 <= chunk_overlap < chunk_size"
+            )
+
         chunks = []
         text = document.content
         start = 0
         position = 0
 
         while start < len(text):
-            end = start + self.chunk_size
+            end = min(start + self.chunk_size, len(text))
 
-            # Find word boundary
+            # Find word boundary; hard-split when the window has no whitespace
             if end < len(text):
-                while end > start and text[end] not in ' \n\t':
-                    end -= 1
+                boundary = end
+                while boundary > start and text[boundary] not in ' \n\t':
+                    boundary -= 1
+                if boundary > start:
+                    end = boundary
 
             chunk_text = text[start:end].strip()
             if chunk_text:
@@ -145,9 +153,11 @@ class TextChunker:
                 ))
                 position += 1
 
-            start = end - self.chunk_overlap
-            if start >= len(text):
+            if end >= len(text):
                 break
+            # Every window must start after the previous one, or the loop never ends
+            next_start = end - self.chunk_overlap
+            start = next_start if next_start > start else end
 
         return chunks
 
