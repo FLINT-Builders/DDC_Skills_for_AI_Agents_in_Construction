@@ -34,6 +34,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import math
 
 class ChangeOrderStatus(Enum):
     DRAFT = "draft"
@@ -148,6 +149,18 @@ class ChangeOrderManager:
         "bond": 0.01,      # 1%
     }
 
+    # Pricing may change only before submission, so the proposal a reviewer
+    # approves against is the one that was submitted.
+    EDITABLE_STATUSES = (
+        ChangeOrderStatus.DRAFT,
+        ChangeOrderStatus.PRICING,
+        ChangeOrderStatus.NEGOTIATING,
+    )
+    APPROVABLE_STATUSES = (
+        ChangeOrderStatus.SUBMITTED,
+        ChangeOrderStatus.UNDER_REVIEW,
+    )
+
     def __init__(self, project_id: str, project_name: str,
                  original_contract: float):
         self.project_id = project_id
@@ -189,14 +202,24 @@ class ChangeOrderManager:
 
         return co
 
+    def _get_change_order(self, co_id: str) -> ChangeOrder:
+        co = self.change_orders.get(co_id)
+        if co is None:
+            raise ValueError(f"Change order {co_id} not found")
+        return co
+
+    def _require_editable(self, co: ChangeOrder):
+        if co.status not in self.EDITABLE_STATUSES:
+            raise ValueError(
+                f"Change order {co.id} pricing is locked in status {co.status.value}"
+            )
+
     def add_line_item(self, co_id: str, description: str,
                      quantity: float, unit: str, unit_price: float,
                      spec_section: str = "", csi_code: str = "") -> ChangeOrderItem:
         """Add line item to change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
+        self._require_editable(co)
 
         item_id = f"{co_id}-{len(co.line_items)+1:03d}"
         item = ChangeOrderItem(
@@ -221,10 +244,8 @@ class ChangeOrderManager:
                           materials: float = 0, equipment: float = 0,
                           subcontractor: float = 0) -> CostBreakdown:
         """Set cost breakdown and calculate markups."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
-
-        co = self.change_orders[co_id]
+        co = self._get_change_order(co_id)
+        self._require_editable(co)
 
         direct = labor + materials + equipment + subcontractor
 
@@ -260,10 +281,12 @@ class ChangeOrderManager:
 
     def submit_change_order(self, co_id: str) -> ChangeOrder:
         """Submit change order for review."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
+        co = self._get_change_order(co_id)
+        if co.status not in self.EDITABLE_STATUSES:
+            raise ValueError(
+                f"Change order {co_id} cannot be submitted from status {co.status.value}"
+            )
 
-        co = self.change_orders[co_id]
         co.status = ChangeOrderStatus.SUBMITTED
         co.submitted_date = datetime.now()
 
@@ -273,11 +296,24 @@ class ChangeOrderManager:
 
     def approve_change_order(self, co_id: str, approved_amount: float,
                             approved_time: int = 0) -> ChangeOrder:
-        """Approve change order."""
-        if co_id not in self.change_orders:
-            raise ValueError(f"Change order {co_id} not found")
+        """Approve a submitted change order for no more than its proposed amount."""
+        co = self._get_change_order(co_id)
+        if co.status not in self.APPROVABLE_STATUSES:
+            raise ValueError(
+                f"Change order {co_id} must be submitted or under review to approve "
+                f"(status: {co.status.value})"
+            )
+        if (isinstance(approved_amount, bool)
+                or not isinstance(approved_amount, (int, float))
+                or not math.isfinite(approved_amount)):
+            raise ValueError("Approved amount must be a finite number")
+        # Written as "not <=" so a NaN proposal is refused as well.
+        if not approved_amount <= co.proposed_amount:
+            raise ValueError(
+                f"Approved amount ${approved_amount:,.2f} exceeds proposed amount "
+                f"${co.proposed_amount:,.2f}"
+            )
 
-        co = self.change_orders[co_id]
         co.status = ChangeOrderStatus.APPROVED
         co.approved_date = datetime.now()
         co.approved_amount = approved_amount
