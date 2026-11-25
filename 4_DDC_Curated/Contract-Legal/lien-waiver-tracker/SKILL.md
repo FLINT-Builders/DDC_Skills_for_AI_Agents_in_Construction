@@ -33,6 +33,7 @@ Track and manage lien waivers throughout the construction payment process. Ensur
 ## Technical Implementation
 
 ```python
+import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
@@ -117,6 +118,9 @@ class LienWaiverTracker:
                          contract_amount: float, contact_name: str,
                          contact_email: str, tier: int = 1) -> Subcontractor:
         """Add subcontractor to tracking."""
+        if not math.isfinite(contract_amount) or contract_amount < 0:
+            raise ValueError("Contract amount must be a non-negative number")
+
         sub = Subcontractor(
             id=id,
             name=name,
@@ -132,12 +136,43 @@ class LienWaiverTracker:
     def create_payment_application(self, number: int, period_end: datetime,
                                   subcontractor_id: str, amount_requested: float,
                                   retainage_rate: float = 0.10) -> PaymentApplication:
-        """Create payment application record."""
-        if subcontractor_id not in self.subcontractors:
+        """Create payment application record.
+
+        Raises ValueError, storing nothing, if the approved amount plus amounts
+        already approved for this subcontractor would exceed the contract.
+        """
+        sub = self.subcontractors.get(subcontractor_id)
+        if sub is None:
             raise ValueError(f"Subcontractor {subcontractor_id} not found")
+        if not math.isfinite(amount_requested) or amount_requested < 0:
+            raise ValueError("Requested amount must be a non-negative number")
+        if not math.isfinite(retainage_rate) or not 0 <= retainage_rate <= 1:
+            raise ValueError("Retainage rate must be between 0 and 1")
 
         retainage = amount_requested * retainage_rate
         amount_approved = amount_requested - retainage
+
+        key = f"{subcontractor_id}-{number}"
+        existing = self.pay_apps.get(key)
+        if existing is not None:
+            if existing.subcontractor_id != subcontractor_id:
+                raise ValueError(f"Payment application {key} belongs to another subcontractor")
+            if existing.status == PaymentStatus.RELEASED:
+                raise ValueError(f"Payment application {key} has already been released")
+
+        # A resubmitted pay app replaces the stored one, so it is not counted twice.
+        already_approved = sum(
+            pa.amount_approved for k, pa in self.pay_apps.items()
+            if pa.subcontractor_id == subcontractor_id and k != key
+        )
+        total_approved = already_approved + amount_approved
+        if (total_approved > sub.contract_amount
+                and not math.isclose(total_approved, sub.contract_amount, rel_tol=1e-12, abs_tol=1e-9)):
+            remaining = max(sub.contract_amount - already_approved, 0.0)
+            raise ValueError(
+                f"Approved amount {amount_approved:,.2f} exceeds remaining contract "
+                f"balance {remaining:,.2f} for subcontractor {subcontractor_id}"
+            )
 
         pay_app = PaymentApplication(
             number=number,
@@ -148,7 +183,6 @@ class LienWaiverTracker:
             retainage=retainage
         )
 
-        key = f"{subcontractor_id}-{number}"
         self.pay_apps[key] = pay_app
 
         # Create waiver request
