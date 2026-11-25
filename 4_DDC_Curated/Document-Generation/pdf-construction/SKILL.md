@@ -146,9 +146,83 @@ def split_drawing_package(pdf_path: str, output_dir: str) -> list:
 
 ## Integration with DDC Pipeline
 
+RFI fields are text taken from a PDF someone else wrote. Keep them in a `SpreadsheetSafeFrame` when adding them to a workbook, so a subject such as `=SUM(...)` or an external workbook link is written as text instead of a formula Excel runs when the log is opened.
+
 ```python
 # Example: Process RFI and add to tracking spreadsheet
 import pandas as pd
+
+class SpreadsheetSafeSeries(pd.Series):
+    """Column of a SpreadsheetSafeFrame; exports through the frame."""
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeSeries
+
+    @property
+    def _constructor_expanddim(self):
+        return SpreadsheetSafeFrame
+
+    def to_excel(self, *args, **kwargs):
+        return self.to_frame().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.to_frame().to_csv(*args, **kwargs)
+
+class SpreadsheetSafeFrame(pd.DataFrame):
+    """DataFrame of untrusted document text.
+
+    Whoever authored the PDF controls every extracted field. Excel runs any
+    cell that starts with a formula character, so to_excel and to_csv write
+    such headers, labels and cells as text (prefixed with an apostrophe).
+    """
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeFrame
+
+    @property
+    def _constructor_sliced(self):
+        return SpreadsheetSafeSeries
+
+    @staticmethod
+    def neutralize(value):
+        if isinstance(value, tuple):
+            return tuple(SpreadsheetSafeFrame.neutralize(part) for part in value)
+        if not isinstance(value, str):
+            return value
+        try:
+            float(value)
+            return value  # plain numbers such as "-150" are not formulas
+        except ValueError:
+            pass
+        first = value.lstrip()[:1]
+        if value[:1] in ("\t", "\r", "\n") or (first and first in "=+-@＝＋－＠"):
+            return "'" + value
+        return value
+
+    def spreadsheet_ready(self):
+        """Plain DataFrame copy that spreadsheet apps read as text only."""
+        safe = pd.DataFrame(self, copy=True)
+        for position in range(safe.shape[1]):
+            column = safe.iloc[:, position]
+            if column.dtype.kind not in "biufcmM":
+                safe.isetitem(position, column.astype(object).map(self.neutralize).to_numpy())
+        safe.columns = self._neutralize_labels(safe.columns)
+        safe.index = self._neutralize_labels(safe.index)
+        return safe
+
+    @classmethod
+    def _neutralize_labels(cls, labels):
+        neutral = labels.map(cls.neutralize)
+        neutral.names = [cls.neutralize(name) for name in labels.names]
+        return neutral
+
+    def to_excel(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_csv(*args, **kwargs)
 
 # Extract RFI data
 rfi_data = extract_rfi_data("RFI_045.pdf")
@@ -158,7 +232,7 @@ tracker = pd.read_excel("RFI_Log.xlsx")
 
 # Add new entry
 new_row = pd.DataFrame([rfi_data])
-tracker = pd.concat([tracker, new_row], ignore_index=True)
+tracker = SpreadsheetSafeFrame(pd.concat([tracker, new_row], ignore_index=True))
 
 # Save updated tracker
 tracker.to_excel("RFI_Log.xlsx", index=False)
