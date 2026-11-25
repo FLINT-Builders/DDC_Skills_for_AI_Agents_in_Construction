@@ -30,6 +30,23 @@ from enum import Enum
 from collections import defaultdict
 
 
+# openpyxl stores a string starting with '=' as a formula and the strings
+# below as error cells; a leading apostrophe keeps such values literal text.
+_EXCEL_ERROR_CODES = {'#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A'}
+
+
+def _excel_text(value: Any) -> Any:
+    """Return value so the Excel writer stores it as text, not a formula."""
+    if isinstance(value, str) and (value.startswith('=') or value in _EXCEL_ERROR_CODES):
+        return "'" + value
+    return value
+
+
+def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Escape every text cell of a sheet before it is written to Excel."""
+    return pd.DataFrame({col: df[col].map(_excel_text) for col in df.columns}, index=df.index)
+
+
 class ActivityStatus(Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
@@ -306,11 +323,11 @@ class CriticalPathAnalyzer:
                 'Near-Critical Activities': len(result.near_critical),
                 'Total Float (days)': result.total_float_days
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            _excel_safe(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # Schedule
             schedule_df = self.get_schedule_dates()
-            schedule_df.to_excel(writer, sheet_name='Schedule', index=False)
+            _excel_safe(schedule_df).to_excel(writer, sheet_name='Schedule', index=False)
 
             # Critical Path
             critical_df = pd.DataFrame([
@@ -321,7 +338,7 @@ class CriticalPathAnalyzer:
                 }
                 for a_id in result.critical_path
             ])
-            critical_df.to_excel(writer, sheet_name='Critical Path', index=False)
+            _excel_safe(critical_df).to_excel(writer, sheet_name='Critical Path', index=False)
 
         return output_path
 ```

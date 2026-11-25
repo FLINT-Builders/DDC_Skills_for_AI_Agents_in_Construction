@@ -16,6 +16,23 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# openpyxl stores a string starting with '=' as a formula and the strings
+# below as error cells; a leading apostrophe keeps such values literal text.
+_EXCEL_ERROR_CODES = {'#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A'}
+
+
+def _excel_text(value: Any) -> Any:
+    """Return value so the Excel writer stores it as text, not a formula."""
+    if isinstance(value, str) and (value.startswith('=') or value in _EXCEL_ERROR_CODES):
+        return "'" + value
+    return value
+
+
+def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Escape every text cell of a sheet before it is written to Excel."""
+    return pd.DataFrame({col: df[col].map(_excel_text) for col in df.columns}, index=df.index)
+
+
 class DelayType(Enum):
     EXCUSABLE_COMPENSABLE = "excusable_compensable"
     EXCUSABLE_NON_COMPENSABLE = "excusable_non_compensable"
@@ -165,7 +182,7 @@ class ScheduleDelayAnalyzer:
             'Cost Impact': d.cost_impact,
             'Description': d.description
         } for d in self.delays.values()]
-        pd.DataFrame(data).to_excel(output_path, index=False)
+        _excel_safe(pd.DataFrame(data)).to_excel(output_path, index=False)
 ```
 
 ## Quick Start
