@@ -22,7 +22,7 @@ Automated IDS (Information Delivery Specification) checking system to validate B
 
 ```python
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -57,6 +57,239 @@ class CheckResult(Enum):
     FAIL = "fail"
     WARNING = "warning"
     NOT_APPLICABLE = "n/a"
+
+
+# Direct subtypes of each supertype in the IfcObjectDefinition tree, merged from
+# the IFC2X3, IFC4 and IFC4X3 schemas. Entity names are case-insensitive.
+_IFC_SUBTYPES = """
+IfcRoot: IfcObjectDefinition
+IfcActor: IfcOccupant
+IfcBeam: IfcBeamStandardCase
+IfcBuildingElement: IfcBeam IfcBuildingElementComponent IfcBuildingElementProxy
+    IfcChimney IfcColumn IfcCovering IfcCurtainWall IfcDoor IfcFooting IfcMember IfcPile
+    IfcPlate IfcRailing IfcRamp IfcRampFlight IfcRoof IfcShadingDevice IfcSlab IfcStair
+    IfcStairFlight IfcWall IfcWindow
+IfcBuildingElementComponent: IfcBuildingElementPart IfcReinforcingElement
+IfcBuildingElementType: IfcBeamType IfcBuildingElementProxyType IfcChimneyType
+    IfcColumnType IfcCoveringType IfcCurtainWallType IfcDoorType IfcFootingType
+    IfcMemberType IfcPileType IfcPlateType IfcRailingType IfcRampFlightType IfcRampType
+    IfcRoofType IfcShadingDeviceType IfcSlabType IfcStairFlightType IfcStairType
+    IfcWallType IfcWindowType
+IfcBuiltElement: IfcBeam IfcBearing IfcBuildingElementProxy IfcChimney IfcColumn
+    IfcCourse IfcCovering IfcCurtainWall IfcDeepFoundation IfcDoor IfcEarthworksElement
+    IfcFooting IfcKerb IfcMember IfcMooringDevice IfcNavigationElement IfcPavement
+    IfcPlate IfcRail IfcRailing IfcRamp IfcRampFlight IfcRoof IfcShadingDevice IfcSlab
+    IfcStair IfcStairFlight IfcTrackElement IfcWall IfcWindow
+IfcBuiltElementType: IfcBeamType IfcBearingType IfcBuildingElementProxyType
+    IfcChimneyType IfcColumnType IfcCourseType IfcCoveringType IfcCurtainWallType
+    IfcDeepFoundationType IfcDoorType IfcFootingType IfcKerbType IfcMemberType
+    IfcMooringDeviceType IfcNavigationElementType IfcPavementType IfcPlateType
+    IfcRailType IfcRailingType IfcRampFlightType IfcRampType IfcRoofType
+    IfcShadingDeviceType IfcSlabType IfcStairFlightType IfcStairType IfcTrackElementType
+    IfcWallType IfcWindowType
+IfcColumn: IfcColumnStandardCase
+IfcConstructionResource: IfcConstructionEquipmentResource
+    IfcConstructionMaterialResource IfcConstructionProductResource IfcCrewResource
+    IfcLaborResource IfcSubContractResource
+IfcConstructionResourceType: IfcConstructionEquipmentResourceType
+    IfcConstructionMaterialResourceType IfcConstructionProductResourceType
+    IfcCrewResourceType IfcLaborResourceType IfcSubContractResourceType
+IfcContext: IfcProject IfcProjectLibrary
+IfcControl: IfcActionRequest IfcConditionCriterion IfcCostItem IfcCostSchedule
+    IfcEquipmentStandard IfcFurnitureStandard IfcPerformanceHistory IfcPermit
+    IfcProjectOrder IfcProjectOrderRecord IfcScheduleTimeControl IfcServiceLife
+    IfcSpaceProgram IfcTimeSeriesSchedule IfcWorkCalendar IfcWorkControl
+IfcDeepFoundation: IfcCaissonFoundation IfcPile
+IfcDeepFoundationType: IfcCaissonFoundationType IfcPileType
+IfcDiscreteAccessoryType: IfcVibrationIsolatorType
+IfcDistributionControlElement: IfcActuator IfcAlarm IfcController IfcFlowInstrument
+    IfcProtectiveDeviceTrippingUnit IfcSensor IfcUnitaryControlElement
+IfcDistributionControlElementType: IfcActuatorType IfcAlarmType IfcControllerType
+    IfcFlowInstrumentType IfcProtectiveDeviceTrippingUnitType IfcSensorType
+    IfcUnitaryControlElementType
+IfcDistributionElement: IfcDistributionControlElement IfcDistributionFlowElement
+IfcDistributionElementType: IfcDistributionControlElementType
+    IfcDistributionFlowElementType
+IfcDistributionFlowElement: IfcDistributionChamberElement IfcEnergyConversionDevice
+    IfcFlowController IfcFlowFitting IfcFlowMovingDevice IfcFlowSegment
+    IfcFlowStorageDevice IfcFlowTerminal IfcFlowTreatmentDevice
+IfcDistributionFlowElementType: IfcDistributionChamberElementType
+    IfcEnergyConversionDeviceType IfcFlowControllerType IfcFlowFittingType
+    IfcFlowMovingDeviceType IfcFlowSegmentType IfcFlowStorageDeviceType
+    IfcFlowTerminalType IfcFlowTreatmentDeviceType
+IfcDistributionSystem: IfcDistributionCircuit
+IfcDoor: IfcDoorStandardCase
+IfcEarthworksElement: IfcEarthworksFill IfcReinforcedSoil
+IfcEdgeFeature: IfcChamferEdgeFeature IfcRoundedEdgeFeature
+IfcElement: IfcBuildingElement IfcBuiltElement IfcCivilElement IfcDistributionElement
+    IfcElectricalElement IfcElementAssembly IfcElementComponent IfcEquipmentElement
+    IfcFeatureElement IfcFurnishingElement IfcGeographicElement IfcGeotechnicalElement
+    IfcTransportElement IfcTransportationDevice IfcVirtualElement
+IfcElementComponent: IfcBuildingElementPart IfcDiscreteAccessory IfcFastener
+    IfcImpactProtectionDevice IfcMechanicalFastener IfcReinforcingElement IfcSign
+    IfcVibrationDamper IfcVibrationIsolator
+IfcElementComponentType: IfcBuildingElementPartType IfcDiscreteAccessoryType
+    IfcFastenerType IfcImpactProtectionDeviceType IfcMechanicalFastenerType
+    IfcReinforcingElementType IfcSignType IfcVibrationDamperType
+    IfcVibrationIsolatorType
+IfcElementType: IfcBuildingElementType IfcBuiltElementType IfcCivilElementType
+    IfcDistributionElementType IfcElementAssemblyType IfcElementComponentType
+    IfcFurnishingElementType IfcGeographicElementType IfcSpatialStructureElementType
+    IfcTransportElementType IfcTransportationDeviceType
+IfcEnergyConversionDevice: IfcAirToAirHeatRecovery IfcBoiler IfcBurner IfcChiller
+    IfcCoil IfcCondenser IfcCooledBeam IfcCoolingTower IfcElectricGenerator
+    IfcElectricMotor IfcEngine IfcEvaporativeCooler IfcEvaporator IfcHeatExchanger
+    IfcHumidifier IfcMotorConnection IfcSolarDevice IfcTransformer IfcTubeBundle
+    IfcUnitaryEquipment
+IfcEnergyConversionDeviceType: IfcAirToAirHeatRecoveryType IfcBoilerType IfcBurnerType
+    IfcChillerType IfcCoilType IfcCondenserType IfcCooledBeamType IfcCoolingTowerType
+    IfcElectricGeneratorType IfcElectricMotorType IfcEngineType IfcEvaporativeCoolerType
+    IfcEvaporatorType IfcHeatExchangerType IfcHumidifierType IfcMotorConnectionType
+    IfcSolarDeviceType IfcSpaceHeaterType IfcTransformerType IfcTubeBundleType
+    IfcUnitaryEquipmentType
+IfcExternalSpatialStructureElement: IfcExternalSpatialElement
+IfcFacility: IfcBridge IfcBuilding IfcMarineFacility IfcRailway IfcRoad
+IfcFacilityPart: IfcBridgePart IfcFacilityPartCommon IfcMarinePart IfcRailwayPart
+    IfcRoadPart
+IfcFastener: IfcMechanicalFastener
+IfcFastenerType: IfcMechanicalFastenerType
+IfcFeatureElement: IfcFeatureElementAddition IfcFeatureElementSubtraction
+    IfcSurfaceFeature
+IfcFeatureElementAddition: IfcProjectionElement
+IfcFeatureElementSubtraction: IfcEarthworksCut IfcEdgeFeature IfcOpeningElement
+    IfcVoidingFeature
+IfcFlowController: IfcAirTerminalBox IfcDamper IfcDistributionBoard
+    IfcElectricDistributionBoard IfcElectricDistributionPoint IfcElectricTimeControl
+    IfcFlowMeter IfcProtectiveDevice IfcSwitchingDevice IfcValve
+IfcFlowControllerType: IfcAirTerminalBoxType IfcDamperType IfcDistributionBoardType
+    IfcElectricDistributionBoardType IfcElectricTimeControlType IfcFlowMeterType
+    IfcProtectiveDeviceType IfcSwitchingDeviceType IfcValveType
+IfcFlowFitting: IfcCableCarrierFitting IfcCableFitting IfcDuctFitting IfcJunctionBox
+    IfcPipeFitting
+IfcFlowFittingType: IfcCableCarrierFittingType IfcCableFittingType IfcDuctFittingType
+    IfcJunctionBoxType IfcPipeFittingType
+IfcFlowMovingDevice: IfcCompressor IfcFan IfcPump
+IfcFlowMovingDeviceType: IfcCompressorType IfcFanType IfcPumpType
+IfcFlowSegment: IfcCableCarrierSegment IfcCableSegment IfcConveyorSegment IfcDuctSegment
+    IfcPipeSegment
+IfcFlowSegmentType: IfcCableCarrierSegmentType IfcCableSegmentType
+    IfcConveyorSegmentType IfcDuctSegmentType IfcPipeSegmentType
+IfcFlowStorageDevice: IfcElectricFlowStorageDevice IfcTank
+IfcFlowStorageDeviceType: IfcElectricFlowStorageDeviceType IfcTankType
+IfcFlowTerminal: IfcAirTerminal IfcAudioVisualAppliance IfcCommunicationsAppliance
+    IfcElectricAppliance IfcFireSuppressionTerminal IfcLamp IfcLightFixture
+    IfcLiquidTerminal IfcMedicalDevice IfcMobileTelecommunicationsAppliance IfcOutlet
+    IfcSanitaryTerminal IfcSignal IfcSpaceHeater IfcStackTerminal IfcWasteTerminal
+IfcFlowTerminalType: IfcAirTerminalType IfcAudioVisualApplianceType
+    IfcCommunicationsApplianceType IfcElectricApplianceType IfcElectricHeaterType
+    IfcFireSuppressionTerminalType IfcGasTerminalType IfcLampType IfcLightFixtureType
+    IfcLiquidTerminalType IfcMedicalDeviceType IfcMobileTelecommunicationsApplianceType
+    IfcOutletType IfcSanitaryTerminalType IfcSignalType IfcSpaceHeaterType
+    IfcStackTerminalType IfcWasteTerminalType
+IfcFlowTreatmentDevice: IfcDuctSilencer IfcElectricFlowTreatmentDevice IfcFilter
+    IfcInterceptor
+IfcFlowTreatmentDeviceType: IfcDuctSilencerType IfcElectricFlowTreatmentDeviceType
+    IfcFilterType IfcInterceptorType
+IfcFurnishingElement: IfcFurniture IfcSystemFurnitureElement
+IfcFurnishingElementType: IfcFurnitureType IfcSystemFurnitureElementType
+IfcGeotechnicalAssembly: IfcBorehole IfcGeomodel IfcGeoslice
+IfcGeotechnicalElement: IfcGeotechnicalAssembly IfcGeotechnicalStratum
+IfcGroup: IfcAsset IfcCondition IfcInventory IfcStructuralLoadGroup
+    IfcStructuralResultGroup IfcSystem IfcZone
+IfcLinearElement: IfcAlignmentCant IfcAlignmentHorizontal IfcAlignmentSegment
+    IfcAlignmentVertical
+IfcLinearPositioningElement: IfcAlignment
+IfcMember: IfcMemberStandardCase
+IfcObject: IfcActor IfcControl IfcGroup IfcProcess IfcProduct IfcProject IfcResource
+IfcObjectDefinition: IfcContext IfcObject IfcTypeObject
+IfcOpeningElement: IfcOpeningStandardCase
+IfcPlate: IfcPlateStandardCase
+IfcPort: IfcDistributionPort
+IfcPositioningElement: IfcGrid IfcLinearPositioningElement IfcReferent
+IfcProcess: IfcEvent IfcProcedure IfcTask
+IfcProduct: IfcAnnotation IfcElement IfcGrid IfcLinearElement IfcPort
+    IfcPositioningElement IfcProxy IfcSpatialElement IfcSpatialStructureElement
+    IfcStructuralActivity IfcStructuralItem
+IfcReinforcingElement: IfcReinforcingBar IfcReinforcingMesh IfcTendon IfcTendonAnchor
+    IfcTendonConduit
+IfcReinforcingElementType: IfcReinforcingBarType IfcReinforcingMeshType
+    IfcTendonAnchorType IfcTendonConduitType IfcTendonType
+IfcResource: IfcConstructionResource
+IfcSlab: IfcSlabElementedCase IfcSlabStandardCase
+IfcSpatialElement: IfcExternalSpatialStructureElement IfcSpatialStructureElement
+    IfcSpatialZone
+IfcSpatialElementType: IfcSpatialStructureElementType IfcSpatialZoneType
+IfcSpatialStructureElement: IfcBuilding IfcBuildingStorey IfcFacility IfcFacilityPart
+    IfcSite IfcSpace
+IfcSpatialStructureElementType: IfcSpaceType
+IfcStructuralAction: IfcStructuralCurveAction IfcStructuralLinearAction
+    IfcStructuralPlanarAction IfcStructuralPointAction IfcStructuralSurfaceAction
+IfcStructuralActivity: IfcStructuralAction IfcStructuralReaction
+IfcStructuralConnection: IfcStructuralCurveConnection IfcStructuralPointConnection
+    IfcStructuralSurfaceConnection
+IfcStructuralCurveAction: IfcStructuralLinearAction
+IfcStructuralCurveMember: IfcStructuralCurveMemberVarying
+IfcStructuralItem: IfcStructuralConnection IfcStructuralMember
+IfcStructuralLinearAction: IfcStructuralLinearActionVarying
+IfcStructuralLoadGroup: IfcStructuralLoadCase
+IfcStructuralMember: IfcStructuralCurveMember IfcStructuralSurfaceMember
+IfcStructuralPlanarAction: IfcStructuralPlanarActionVarying
+IfcStructuralReaction: IfcStructuralCurveReaction IfcStructuralPointReaction
+    IfcStructuralSurfaceReaction
+IfcStructuralSurfaceAction: IfcStructuralPlanarAction
+IfcStructuralSurfaceMember: IfcStructuralSurfaceMemberVarying
+IfcSystem: IfcBuildingSystem IfcBuiltSystem IfcDistributionSystem IfcElectricalCircuit
+    IfcStructuralAnalysisModel IfcZone
+IfcTask: IfcMove IfcOrderAction
+IfcTransportationDevice: IfcTransportElement IfcVehicle
+IfcTransportationDeviceType: IfcTransportElementType IfcVehicleType
+IfcTypeObject: IfcTypeProcess IfcTypeProduct IfcTypeResource
+IfcTypeProcess: IfcEventType IfcProcedureType IfcTaskType
+IfcTypeProduct: IfcDoorStyle IfcElementType IfcSpatialElementType IfcWindowStyle
+IfcTypeResource: IfcConstructionResourceType
+IfcWall: IfcWallElementedCase IfcWallStandardCase
+IfcWindow: IfcWindowStandardCase
+IfcWorkControl: IfcWorkPlan IfcWorkSchedule
+"""
+
+
+def _build_ifc_supertypes(table: str) -> Dict[str, Set[str]]:
+    supertypes: Dict[str, Set[str]] = {}
+    parent = None
+    for token in table.split():
+        if token.endswith(':'):
+            parent = token[:-1].lower()
+            supertypes.setdefault(parent, set())
+        else:
+            supertypes.setdefault(token.lower(), set()).add(parent)
+    return supertypes
+
+
+IFC_SUPERTYPES = _build_ifc_supertypes(_IFC_SUBTYPES)
+
+
+def ifc_entity_key(name: Any) -> str:
+    return str(name or '').strip().lower()
+
+
+def is_known_ifc_entity(name: Any) -> bool:
+    return ifc_entity_key(name) in IFC_SUPERTYPES
+
+
+def ifc_is_a(entity_type: Any, entity_filter: Any) -> bool:
+    """True if entity_type is entity_filter or one of its IFC subtypes."""
+    target = ifc_entity_key(entity_filter)
+    pending = [ifc_entity_key(entity_type)]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if not current or current in seen:
+            continue
+        if current == target:
+            return True
+        seen.add(current)
+        pending.extend(IFC_SUPERTYPES.get(current, ()))
+    return False
 
 
 @dataclass
@@ -259,8 +492,7 @@ class IDSChecker:
 
         entity_filter = applicability.get('entity')
         if entity_filter:
-            element_type = element.get('type', '')
-            if entity_filter not in element_type:
+            if not ifc_is_a(element.get('type'), entity_filter):
                 return False
 
         return True
@@ -388,6 +620,16 @@ class IDSChecker:
         pass_count = sum(1 for r in self.results if r.result == CheckResult.PASS)
         fail_count = sum(1 for r in self.results if r.result == CheckResult.FAIL)
         warning_count = sum(1 for r in self.results if r.result == CheckResult.WARNING)
+        unrecognized_types = sorted({str(e.get('type', '')) for e in elements
+                                     if not is_known_ifc_entity(e.get('type'))})
+
+        # Nothing checked, or elements whose IFC class is unknown, cannot prove compliance
+        if fail_count:
+            status = 'NON-COMPLIANT'
+        elif not self.results or unrecognized_types:
+            status = 'INCOMPLETE'
+        else:
+            status = 'COMPLIANT'
 
         return {
             'specification': spec_id,
@@ -397,7 +639,8 @@ class IDSChecker:
             'failed': fail_count,
             'warnings': warning_count,
             'compliance_rate': round(pass_count / len(self.results) * 100, 1) if self.results else 0,
-            'status': 'COMPLIANT' if fail_count == 0 else 'NON-COMPLIANT'
+            'unrecognized_types': unrecognized_types,
+            'status': status
         }
 
     def get_failed_checks(self) -> List[Dict[str, Any]]:
@@ -479,6 +722,12 @@ results = checker.check_model(elements, cobie_spec)
 print(f"Compliance: {results['compliance_rate']}%")
 print(f"Status: {results['status']}")
 ```
+
+A requirement's entity applies to that IFC class and all of its subtypes, so an
+`IfcElement` requirement checks `IfcWall`, `IfcDoor`, `IfcSlab`, and so on, and an
+`IfcTypeObject` requirement checks `IfcDoorType`. The status is `NON-COMPLIANT` when any
+check fails, and `INCOMPLETE` when no requirement applied to any element or when an
+element's type is not a known IFC class (listed in `unrecognized_types`).
 
 ## Common Use Cases
 
