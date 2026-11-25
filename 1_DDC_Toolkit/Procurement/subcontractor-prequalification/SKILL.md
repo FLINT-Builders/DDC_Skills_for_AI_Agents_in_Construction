@@ -16,6 +16,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# Spreadsheet clients evaluate cells starting with these as formulas (or DDE).
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "\uff1d", "\uff0b", "\uff0d", "\uff20")
+
+
+def excel_safe(value: Any) -> Any:
+    """Store applicant-supplied text as literal text, never as a formula."""
+    if isinstance(value, str) and value.lstrip(" ").startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 class QualificationStatus(Enum):
     PENDING = "pending"
     QUALIFIED = "qualified"
@@ -129,6 +140,7 @@ class SubcontractorPrequalification:
             'Status': a.status.value,
             'Score': a.total_score
         } for a in self.applications.values()]
+        data = [{k: excel_safe(v) for k, v in row.items()} for row in data]
         pd.DataFrame(data).to_excel(output_path, index=False)
 ```
 
