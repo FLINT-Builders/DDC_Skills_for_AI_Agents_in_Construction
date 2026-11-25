@@ -22,6 +22,66 @@ The QTO process is central to 5D BIM:
 - **4D**: Time (schedule integration)
 - **5D**: Cost (quantity × unit price)
 
+## Spreadsheet-Safe Text
+
+Category, Level, Material, Type and other names come from whoever authored the
+BIM/CAD export. A name such as `=B2` or `+HYPERLINK(...)` becomes a live formula
+when written to Excel or CSV. Pass every frame through `spreadsheet_safe` before
+`to_excel` / `to_csv`; it neutralizes cell values, index labels, column labels
+and their names.
+
+```python
+import unicodedata
+import pandas as pd
+
+def spreadsheet_text(value):
+    """
+    Return value so that Excel, LibreOffice Calc and CSV readers keep it as text.
+
+    Text that a spreadsheet could read as a formula (=, +, -, @, also after
+    leading whitespace, control characters or quotes, or starting with a tab,
+    CR or LF) is prefixed with a zero-width space. Readers do not strip that
+    character, unlike an apostrophe or whitespace. Non-text values are
+    returned unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    start = 0
+    while start < len(value) and (
+        value[start].isspace()
+        or value[start] in "'\""
+        or unicodedata.category(value[start]) == "Cc"
+    ):
+        start += 1
+    if value[:1] in ("\t", "\r", "\n") or value[start:start + 1] in (
+        "=", "+", "-", "@", "\uff1d", "\uff0b", "\uff0d", "\uff20"
+    ):
+        return "\u200b" + value
+    return value
+
+def spreadsheet_safe(data):
+    """Return a copy of a DataFrame or Series that is safe to write to Excel/CSV"""
+    if isinstance(data, pd.Series):
+        safe = spreadsheet_safe(data.to_frame()).iloc[:, 0]
+        safe.name = spreadsheet_text(data.name)
+        return safe
+
+    safe = data.rename(index=spreadsheet_text, columns=spreadsheet_text)
+    safe.index = safe.index.set_names(
+        [spreadsheet_text(name) for name in safe.index.names]
+    )
+    safe.columns = safe.columns.set_names(
+        [spreadsheet_text(name) for name in safe.columns.names]
+    )
+    for position, dtype in enumerate(safe.dtypes):
+        if (pd.api.types.is_numeric_dtype(dtype)
+                or pd.api.types.is_datetime64_any_dtype(dtype)
+                or pd.api.types.is_timedelta64_dtype(dtype)):
+            continue
+        safe.isetitem(position, safe.iloc[:, position].map(spreadsheet_text))
+    return safe
+```
+
 ## Quick Start
 
 ```python
@@ -41,6 +101,8 @@ qto = df.groupby('Category').agg({
 qto['Unit_Price'] = [150, 80, 450, 200]  # $/m³
 qto['Total_Cost'] = qto['Volume'] * qto['Unit_Price']
 
+# Category names come from the BIM export and may contain formulas
+qto = spreadsheet_safe(qto)
 qto.to_excel("qto_report.xlsx")
 ```
 
@@ -81,7 +143,7 @@ def generate_qto(df, group_by='Category'):
     if 'ElementId' in agg_dict:
         qto = qto.rename(columns={'ElementId': 'Count'})
 
-    return qto.round(2)
+    return spreadsheet_safe(qto.round(2))
 
 # Usage
 qto = generate_qto(df, group_by='Category')
@@ -105,7 +167,7 @@ def generate_multi_level_qto(df):
     qto['Volume_Pct'] = (qto['Volume_m3'] /
                           qto['Volume_m3'].sum() * 100).round(1)
 
-    return qto.sort_values('Volume_m3', ascending=False)
+    return spreadsheet_safe(qto.sort_values('Volume_m3', ascending=False))
 
 # Usage
 qto = generate_multi_level_qto(df)
@@ -128,7 +190,7 @@ def generate_qto_pivot(df, values='Volume', index='Level', columns='Category'):
         margins_name='TOTAL'
     ).round(2)
 
-    return pivot
+    return spreadsheet_safe(pivot)
 
 # Usage - Volume by Level and Category
 qto_pivot = generate_qto_pivot(df, values='Volume')
@@ -163,7 +225,7 @@ def calculate_cost_from_qto(qto_df, prices_df, quantity_col='Volume'):
     grand_total = result['Total_Cost'].sum()
     print(f"Grand Total: ${grand_total:,.2f}")
 
-    return result
+    return spreadsheet_safe(result)
 
 # Unit prices database
 prices = pd.DataFrame({
@@ -211,7 +273,7 @@ def apply_excel_rules(df, rules_path):
         category_data['Unit'] = rule['Unit']
         results.append(category_data)
 
-    return pd.concat(results, ignore_index=True)
+    return spreadsheet_safe(pd.concat(results, ignore_index=True))
 
 # Usage
 df_with_quantities = apply_excel_rules(df, "calculation_rules.xlsx")
@@ -246,7 +308,7 @@ def process_revit_export(csv_path):
         # Revit exports in cubic feet by default
         df['Volume_m3'] = df['Volume'] * 0.0283168
 
-    return df
+    return spreadsheet_safe(df)
 
 # Usage
 df = process_revit_export("revit_schedule.csv")
@@ -289,7 +351,7 @@ def extract_qto_from_ifc(ifc_path):
 
         elements.append(props)
 
-    return pd.DataFrame(elements)
+    return spreadsheet_safe(pd.DataFrame(elements))
 
 # Usage
 df = extract_qto_from_ifc("model.ifc")
@@ -321,7 +383,7 @@ def material_breakdown_qto(df):
         axis=1
     ).round(1)
 
-    return breakdown
+    return spreadsheet_safe(breakdown)
 
 # Usage
 material_qto = material_breakdown_qto(df)
@@ -348,7 +410,7 @@ def qto_with_waste(df, waste_factors):
     qto['Gross_Volume'] = qto['Volume'] * qto['Waste_Factor']
     qto['Waste_Volume'] = qto['Gross_Volume'] - qto['Net_Volume']
 
-    return qto
+    return spreadsheet_safe(qto)
 
 # Usage
 waste = {'Concrete': 1.05, 'Brick': 1.08, 'Steel': 1.03}
@@ -374,7 +436,7 @@ def compare_qto(design_df, asbuilt_df, group_by='Category'):
         comparison['Design'] * 100
     ).round(1)
 
-    return comparison
+    return spreadsheet_safe(comparison)
 
 # Usage
 comparison = compare_qto(design_df, asbuilt_df)
@@ -391,19 +453,21 @@ def export_qto_report(qto_df, base_name, include_charts=True):
     from openpyxl import Workbook
     from openpyxl.chart import BarChart, Reference
 
+    safe_df = spreadsheet_safe(qto_df)
+
     # Excel with multiple sheets
     with pd.ExcelWriter(f"{base_name}.xlsx", engine='openpyxl') as writer:
         # Summary sheet
-        qto_df.to_excel(writer, sheet_name='Summary')
+        safe_df.to_excel(writer, sheet_name='Summary')
 
         # Detailed data
         if hasattr(qto_df, 'reset_index'):
-            qto_df.reset_index().to_excel(
+            spreadsheet_safe(qto_df.reset_index()).to_excel(
                 writer, sheet_name='Details', index=False
             )
 
     # CSV for integration
-    qto_df.to_csv(f"{base_name}.csv")
+    safe_df.to_csv(f"{base_name}.csv")
 
     # JSON for API
     qto_df.reset_index().to_json(
@@ -426,6 +490,7 @@ export_qto_report(qto, "project_qto")
 | Apply prices | `qto.merge(prices, on='Category')` |
 | Calculate cost | `df['Cost'] = df['Volume'] * df['Unit_Price']` |
 | Add waste factor | `df['Gross'] = df['Net'] * waste_factor` |
+| Export to Excel/CSV | `spreadsheet_safe(qto).to_excel("qto.xlsx")` |
 
 ## Resources
 
