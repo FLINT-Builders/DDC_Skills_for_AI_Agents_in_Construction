@@ -154,6 +154,11 @@ class CWICRChangeOrder:
         co = self._change_orders.get(co_number)
         if co is None:
             raise ValueError(f"Change order {co_number} not found")
+        if co.status != ChangeStatus.DRAFT:
+            raise ValueError(
+                f"Cannot add items to change order {co_number} with status "
+                f"{co.status.value}; only draft change orders can be priced"
+            )
 
         unit_cost, unit = self.get_unit_cost(work_item_code)
 
@@ -182,16 +187,12 @@ class CWICRChangeOrder:
         )
 
         co.items.append(item)
-        self._recalculate_totals(co_number)
+        self._recalculate_totals(co)
 
         return item
 
-    def _recalculate_totals(self, co_number: str):
+    def _recalculate_totals(self, co: ChangeOrder):
         """Recalculate change order totals."""
-        co = self._change_orders.get(co_number)
-        if co is None:
-            return
-
         direct_impact = sum(item.cost_impact for item in co.items)
         overhead = direct_impact * self.overhead_rate
         profit = (direct_impact + overhead) * self.profit_rate
@@ -211,6 +212,11 @@ class CWICRChangeOrder:
         """Update change order status."""
         co = self._change_orders.get(co_number)
         if co:
+            if status == ChangeStatus.DRAFT and co.status != ChangeStatus.DRAFT:
+                raise ValueError(
+                    f"Change order {co_number} with status {co.status.value} "
+                    f"cannot return to draft"
+                )
             co.status = status
 
     def get_change_order(self, co_number: str) -> Optional[ChangeOrder]:

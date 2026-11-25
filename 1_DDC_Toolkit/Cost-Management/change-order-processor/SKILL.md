@@ -182,11 +182,15 @@ class ChangeOrderProcessor:
                      unit_cost: float,
                      category: str,
                      markup_percent: float = 0.0):
-        """Add cost item to change order."""
-        if co_number not in self.change_orders:
+        """Add cost item to a draft change order."""
+        co = self.change_orders.get(co_number)
+        if co is None:
             raise ValueError(f"Change order {co_number} not found")
-
-        co = self.change_orders[co_number]
+        if co.status != ChangeOrderStatus.DRAFT:
+            raise ValueError(
+                f"Cannot add cost items to change order {co_number} with status "
+                f"{co.status.value}; only draft change orders can be priced"
+            )
 
         total = quantity * unit_cost * (1 + markup_percent)
         item = CostItem(

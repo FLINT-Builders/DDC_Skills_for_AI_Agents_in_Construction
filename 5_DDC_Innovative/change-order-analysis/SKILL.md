@@ -203,9 +203,14 @@ class ChangeOrderManager:
         return co
 
     def update_cost(self, co_id: str, cost_breakdown: CostBreakdown):
-        """Update change order cost"""
+        """Update cost of a draft change order"""
         co = self.change_orders.get(co_id)
         if co:
+            if co.status != ChangeOrderStatus.DRAFT:
+                raise ValueError(
+                    f"Cannot update cost of change order {co_id} with status "
+                    f"{co.status.value}; only draft change orders can be priced"
+                )
             co.cost_breakdown = cost_breakdown
             co.severity = self._calculate_severity(co)
 
