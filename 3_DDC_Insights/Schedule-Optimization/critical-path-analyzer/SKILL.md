@@ -83,6 +83,9 @@ class CriticalPathAnalyzer:
                     resources: List[str] = None,
                     cost: float = 0.0) -> Activity:
         """Add activity to schedule."""
+        if id in (predecessors or []):
+            raise ValueError(f"Activity {id} cannot list itself as a predecessor")
+
         activity = Activity(
             id=id,
             name=name,
@@ -129,6 +132,8 @@ class CriticalPathAnalyzer:
             act.total_float = 0
             act.free_float = 0
             act.is_critical = False
+
+        self._link_successors()
 
         # Forward pass - calculate early start/finish
         self._forward_pass()
@@ -180,14 +185,29 @@ class CriticalPathAnalyzer:
 
         return self.analysis
 
+    def _link_successors(self):
+        """Rebuild successor lists from predecessors, rejecting invalid links."""
+        for act in self.activities.values():
+            act.successors = []
+
+        for act in self.activities.values():
+            for pred_id in act.predecessors:
+                if pred_id == act.id:
+                    raise ValueError(f"Activity {act.id} cannot list itself as a predecessor")
+                if pred_id not in self.activities:
+                    raise ValueError(f"Activity {act.id} has unknown predecessor {pred_id}")
+                self.activities[pred_id].successors.append(act.id)
+
     def _forward_pass(self):
         """Forward pass to calculate early start/finish."""
         # Topological sort
         in_degree = {act_id: len(act.predecessors) for act_id, act in self.activities.items()}
         queue = [act_id for act_id, degree in in_degree.items() if degree == 0]
+        processed = set()
 
         while queue:
             act_id = queue.pop(0)
+            processed.add(act_id)
             act = self.activities[act_id]
 
             # Early start is max of predecessor early finishes
@@ -205,6 +225,10 @@ class CriticalPathAnalyzer:
                 in_degree[succ_id] -= 1
                 if in_degree[succ_id] == 0:
                     queue.append(succ_id)
+
+        if len(processed) != len(self.activities):
+            cyclic = sorted(set(self.activities) - processed)
+            raise ValueError(f"Schedule contains a dependency cycle involving: {', '.join(cyclic)}")
 
     def _backward_pass(self, project_duration: int):
         """Backward pass to calculate late start/finish."""
@@ -255,9 +279,13 @@ class CriticalPathAnalyzer:
 
         # Build sequence
         path = []
+        visited = set()
         current = start_acts[0]
 
         while current:
+            if current.id in visited:
+                raise ValueError(f"Critical path contains a dependency cycle at activity {current.id}")
+            visited.add(current.id)
             path.append(current.id)
             # Find next critical successor
             critical_successors = [s for s in current.successors if s in critical_ids]
