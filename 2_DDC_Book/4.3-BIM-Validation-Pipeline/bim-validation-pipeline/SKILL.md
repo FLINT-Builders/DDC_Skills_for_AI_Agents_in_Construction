@@ -472,6 +472,27 @@ class IDSValidator:
 import os
 from datetime import datetime
 import json
+import pandas as pd
+
+_FORMULA_MARKERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+_LEADING_CONTROL = ('\t', '\r', '\n')
+
+
+def excel_safe(value):
+    """Neutralize text that a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and (
+        value.startswith(_LEADING_CONTROL) or value.lstrip().startswith(_FORMULA_MARKERS)
+    ):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df):
+    """Apply excel_safe to every cell and header before writing to Excel."""
+    safe = df.apply(lambda column: column.map(excel_safe))
+    safe.columns = [excel_safe(c) for c in df.columns]
+    return safe
+
 
 class BIMValidationPipeline:
     """Automated BIM validation pipeline"""
@@ -574,7 +595,7 @@ class BIMValidationPipeline:
                     latest['bim_validation']['warnings']
                 ]
             })
-            summary.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(summary).to_excel(writer, sheet_name='Summary', index=False)
 
             # Issues
             if latest['bim_validation']['issues']:
@@ -588,7 +609,7 @@ class BIMValidationPipeline:
                     }
                     for i in latest['bim_validation']['issues']
                 ])
-                issues_df.to_excel(writer, sheet_name='Issues', index=False)
+                excel_safe_frame(issues_df).to_excel(writer, sheet_name='Issues', index=False)
 
         return output_path
 ```
