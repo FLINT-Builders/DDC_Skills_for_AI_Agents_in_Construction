@@ -193,14 +193,21 @@ class EquipmentTelematics:
     def add_geofence(self, id: str, name: str, center_lat: float,
                     center_lon: float, radius_meters: float,
                     allowed_equipment: List[str] = None) -> Geofence:
-        """Add geofence boundary."""
+        """Add geofence boundary.
+
+        An empty allowed_equipment list means no restriction: any machine may
+        work inside the boundary. A non-empty list restricts the boundary to
+        those machine ids; any other machine inside it raises GEOFENCE_INTRUSION.
+        """
+        if isinstance(allowed_equipment, str):
+            allowed_equipment = [allowed_equipment]
         geofence = Geofence(
             id=id,
             name=name,
             center_lat=center_lat,
             center_lon=center_lon,
             radius_meters=radius_meters,
-            allowed_equipment=allowed_equipment or []
+            allowed_equipment=list(allowed_equipment or [])
         )
         self.geofences[id] = geofence
         return geofence
@@ -286,12 +293,18 @@ class EquipmentTelematics:
                 geofence.center_lat, geofence.center_lon
             )
 
-            if distance > geofence.radius_meters:
-                if (not geofence.allowed_equipment or
-                    equipment_id in geofence.allowed_equipment):
-                    self._add_fault(equipment_id, "GEOFENCE_EXIT",
-                                  f"Equipment left {geofence.name} boundary",
-                                  FaultSeverity.WARNING)
+            inside = distance <= geofence.radius_meters
+            restricted = bool(geofence.allowed_equipment)
+            allowed = equipment_id in geofence.allowed_equipment
+
+            if inside and restricted and not allowed:
+                self._add_fault(equipment_id, "GEOFENCE_INTRUSION",
+                              f"Unauthorized equipment inside {geofence.name} boundary",
+                              FaultSeverity.CRITICAL)
+            elif not inside and (not restricted or allowed):
+                self._add_fault(equipment_id, "GEOFENCE_EXIT",
+                              f"Equipment left {geofence.name} boundary",
+                              FaultSeverity.WARNING)
 
     def _haversine_distance(self, lat1: float, lon1: float,
                            lat2: float, lon2: float) -> float:
