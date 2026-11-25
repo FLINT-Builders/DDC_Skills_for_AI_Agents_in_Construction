@@ -34,6 +34,26 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+_FORMULA_MARKERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+_LEADING_CONTROL = ('\t', '\r', '\n')
+
+
+def excel_safe(value: Any) -> Any:
+    """Neutralize text that a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and (
+        value.startswith(_LEADING_CONTROL) or value.lstrip().startswith(_FORMULA_MARKERS)
+    ):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe to every cell and header before writing to Excel."""
+    safe = df.apply(lambda column: column.map(excel_safe))
+    safe.columns = [excel_safe(c) for c in df.columns]
+    return safe
+
+
 class ValidationSeverity(Enum):
     """Validation issue severity."""
     ERROR = "error"
@@ -337,7 +357,11 @@ class BIMValidationEngine:
         )
 
     def export_report(self, report: ValidationReport, output_path: str):
-        """Export validation report to Excel."""
+        """Export validation report to Excel.
+
+        Element ids, names, categories, and project/model names come from the
+        model being checked, so every sheet goes through excel_safe_frame.
+        """
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary sheet
             summary_data = {
@@ -350,12 +374,13 @@ class BIMValidationEngine:
                          report.rules_checked, report.summary_by_severity['error'],
                          report.summary_by_severity['warning'], report.summary_by_severity['info']]
             }
-            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(pd.DataFrame(summary_data)).to_excel(
+                writer, sheet_name='Summary', index=False)
 
             # Issues sheet
             issues_df = pd.DataFrame([i.to_dict() for i in report.issues])
             if not issues_df.empty:
-                issues_df.to_excel(writer, sheet_name='Issues', index=False)
+                excel_safe_frame(issues_df).to_excel(writer, sheet_name='Issues', index=False)
 
             # By Category sheet
             cat_df = pd.DataFrame([
@@ -363,7 +388,7 @@ class BIMValidationEngine:
                 for k, v in report.summary_by_category.items()
             ])
             if not cat_df.empty:
-                cat_df.to_excel(writer, sheet_name='By Category', index=False)
+                excel_safe_frame(cat_df).to_excel(writer, sheet_name='By Category', index=False)
 
         return output_path
 
