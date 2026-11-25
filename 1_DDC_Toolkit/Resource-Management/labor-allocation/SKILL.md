@@ -29,6 +29,25 @@ from enum import Enum
 from collections import defaultdict
 
 
+# Leading characters a spreadsheet application may evaluate as a formula.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def neutralize_formula(value: Any) -> Any:
+    """Prefix text that a spreadsheet could evaluate with a single quote."""
+    if isinstance(value, str) and value[:1] in FORMULA_PREFIXES:
+        return "'" + value
+    return value
+
+
+def neutralize_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of df with every text cell safe to write to a workbook."""
+    safe = df.copy()
+    for column in safe.select_dtypes(include=['object', 'string']).columns:
+        safe[column] = safe[column].map(neutralize_formula)
+    return safe
+
+
 class Trade(Enum):
     CARPENTER = "carpenter"
     ELECTRICIAN = "electrician"
@@ -362,7 +381,7 @@ class LaborAllocation:
                 }
                 for w in self.workers.values()
             ])
-            workers_df.to_excel(writer, sheet_name='Workers', index=False)
+            neutralize_frame(workers_df).to_excel(writer, sheet_name='Workers', index=False)
 
             # Assignments
             assignments_df = pd.DataFrame([
@@ -377,11 +396,11 @@ class LaborAllocation:
                 }
                 for a in self.assignments
             ])
-            assignments_df.to_excel(writer, sheet_name='Assignments', index=False)
+            neutralize_frame(assignments_df).to_excel(writer, sheet_name='Assignments', index=False)
 
             # Roster for today
             roster = self.get_daily_roster(date.today())
-            roster.to_excel(writer, sheet_name='Today Roster', index=False)
+            neutralize_frame(roster).to_excel(writer, sheet_name='Today Roster', index=False)
 
         return output_path
 ```
