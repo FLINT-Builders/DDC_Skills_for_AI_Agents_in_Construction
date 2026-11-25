@@ -150,6 +150,16 @@ def split_drawing_package(pdf_path: str, output_dir: str) -> list:
 # Example: Process RFI and add to tracking spreadsheet
 import pandas as pd
 
+# Excel, LibreOffice and CSV importers treat text starting with these as a formula.
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def sanitize_spreadsheet_value(value):
+    """Keep PDF-supplied text from being evaluated when the workbook is opened"""
+    if isinstance(value, str):
+        if value.startswith(FORMULA_TRIGGERS) or value.lstrip().startswith(FORMULA_TRIGGERS):
+            return "'" + value
+    return value
+
 # Extract RFI data
 rfi_data = extract_rfi_data("RFI_045.pdf")
 
@@ -157,7 +167,7 @@ rfi_data = extract_rfi_data("RFI_045.pdf")
 tracker = pd.read_excel("RFI_Log.xlsx")
 
 # Add new entry
-new_row = pd.DataFrame([rfi_data])
+new_row = pd.DataFrame([{k: sanitize_spreadsheet_value(v) for k, v in rfi_data.items()}])
 tracker = pd.concat([tracker, new_row], ignore_index=True)
 
 # Save updated tracker

@@ -34,7 +34,8 @@ with pdfplumber.open("construction_spec.pdf") as pdf:
     page = pdf.pages[0]
     table = page.extract_table()
     df = pd.DataFrame(table[1:], columns=table[0])
-    df.to_excel("extracted_data.xlsx", index=False)
+    # sanitize_for_spreadsheet is defined in "Spreadsheet-Safe Export" below
+    sanitize_for_spreadsheet(df).to_excel("extracted_data.xlsx", index=False)
 ```
 
 ## Installation
@@ -49,6 +50,34 @@ pip install pytesseract pdf2image
 
 # For advanced PDF operations
 pip install pypdf
+```
+
+## Spreadsheet-Safe Export
+
+Text extracted from a PDF is controlled by whoever wrote the PDF. Pass every
+DataFrame through `sanitize_for_spreadsheet` before `to_excel` or `to_csv` so a
+cell such as `=HYPERLINK(...)` is stored as text instead of a formula.
+
+```python
+import pandas as pd
+
+# Excel, LibreOffice and CSV importers treat text starting with these as a formula.
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def sanitize_spreadsheet_value(value):
+    """Keep PDF-supplied text from being evaluated when the file is opened"""
+    if isinstance(value, str):
+        if value.startswith(FORMULA_TRIGGERS) or value.lstrip().startswith(FORMULA_TRIGGERS):
+            return "'" + value
+    return value
+
+def sanitize_for_spreadsheet(df):
+    """Return a copy of df whose text cells and headers cannot run as formulas"""
+    safe = df.copy()
+    safe.columns = [sanitize_spreadsheet_value(c) for c in df.columns]
+    for i in range(safe.shape[1]):
+        safe.isetitem(i, safe.iloc[:, i].map(sanitize_spreadsheet_value))
+    return safe
 ```
 
 ## Native PDF Extraction (pdfplumber)
@@ -80,7 +109,7 @@ def extract_tables_from_pdf(pdf_path):
 
 # Usage
 df = extract_tables_from_pdf("material_specification.pdf")
-df.to_excel("materials.xlsx", index=False)
+sanitize_for_spreadsheet(df).to_excel("materials.xlsx", index=False)
 ```
 
 ### Extract Text with Layout
@@ -167,7 +196,7 @@ def ocr_scanned_pdf(pdf_path, language='eng'):
 
 # Usage
 df = ocr_scanned_pdf("scanned_specification.pdf", language='eng')
-df.to_csv("ocr_results.csv", index=False)
+sanitize_for_spreadsheet(df).to_csv("ocr_results.csv", index=False)
 ```
 
 ### OCR Table Extraction
@@ -247,7 +276,7 @@ def extract_bom_from_pdf(pdf_path):
 
 # Usage
 bom = extract_bom_from_pdf("project_bom.pdf")
-bom.to_excel("bom_extracted.xlsx", index=False)
+sanitize_for_spreadsheet(bom).to_excel("bom_extracted.xlsx", index=False)
 ```
 
 ### Project Schedule Extraction
@@ -358,7 +387,7 @@ def batch_extract_tables(folder_path, output_folder):
 
                             # Save individual table
                             output_name = f"{pdf_path.stem}_p{page_num+1}_t{table_num+1}.xlsx"
-                            df.to_excel(Path(output_folder) / output_name, index=False)
+                            sanitize_for_spreadsheet(df).to_excel(Path(output_folder) / output_name, index=False)
                             results.append(df)
         except Exception as e:
             print(f"Error processing {pdf_path.name}: {e}")
@@ -366,7 +395,7 @@ def batch_extract_tables(folder_path, output_folder):
     # Combined output
     if results:
         combined = pd.concat(results, ignore_index=True)
-        combined.to_excel(Path(output_folder) / "all_tables.xlsx", index=False)
+        sanitize_for_spreadsheet(combined).to_excel(Path(output_folder) / "all_tables.xlsx", index=False)
 
     return len(results)
 
@@ -404,7 +433,7 @@ def clean_extracted_data(df):
 # Usage
 df = extract_tables_from_pdf("document.pdf")
 df_clean = clean_extracted_data(df)
-df_clean.to_excel("clean_data.xlsx", index=False)
+sanitize_for_spreadsheet(df_clean).to_excel("clean_data.xlsx", index=False)
 ```
 
 ## Export Options
@@ -415,11 +444,13 @@ import json
 
 def export_to_multiple_formats(df, base_name):
     """Export DataFrame to multiple formats"""
+    safe = sanitize_for_spreadsheet(df)
+
     # Excel
-    df.to_excel(f"{base_name}.xlsx", index=False)
+    safe.to_excel(f"{base_name}.xlsx", index=False)
 
     # CSV
-    df.to_csv(f"{base_name}.csv", index=False, encoding='utf-8-sig')
+    safe.to_csv(f"{base_name}.csv", index=False, encoding='utf-8-sig')
 
     # JSON
     df.to_json(f"{base_name}.json", orient='records', indent=2)

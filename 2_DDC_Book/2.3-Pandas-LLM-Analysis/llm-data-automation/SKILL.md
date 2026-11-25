@@ -111,9 +111,27 @@ def pdf_to_dataframe(pdf_path):
         return pd.concat(all_tables, ignore_index=True)
     return pd.DataFrame()
 
+# Excel, LibreOffice and CSV importers treat text starting with these as a formula.
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def sanitize_spreadsheet_value(value):
+    """Keep PDF-supplied text from being evaluated when the workbook is opened"""
+    if isinstance(value, str):
+        if value.startswith(FORMULA_TRIGGERS) or value.lstrip().startswith(FORMULA_TRIGGERS):
+            return "'" + value
+    return value
+
+def sanitize_for_spreadsheet(df):
+    """Return a copy of df whose text cells and headers cannot run as formulas"""
+    safe = df.copy()
+    safe.columns = [sanitize_spreadsheet_value(c) for c in df.columns]
+    for i in range(safe.shape[1]):
+        safe.isetitem(i, safe.iloc[:, i].map(sanitize_spreadsheet_value))
+    return safe
+
 # Usage
 df = pdf_to_dataframe("construction_spec.pdf")
-df.to_excel("extracted_data.xlsx", index=False)
+sanitize_for_spreadsheet(df).to_excel("extracted_data.xlsx", index=False)
 ```
 
 ### 2. Process BIM Element Data
