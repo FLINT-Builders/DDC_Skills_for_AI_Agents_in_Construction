@@ -28,6 +28,25 @@ from datetime import date, timedelta
 from enum import Enum
 
 
+# Spreadsheet apps evaluate cells that start with these characters as formulas.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def excel_safe_value(value: Any) -> Any:
+    """Store formula-leading text as literal text."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize formula-leading strings in every cell before to_excel."""
+    safe = df.copy()
+    for column in safe.columns:
+        safe[column] = safe[column].map(excel_safe_value)
+    return safe
+
+
 class PunchItemStatus(Enum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
@@ -332,7 +351,7 @@ class PunchListManager:
                 'Completion %': summary.completion_rate,
                 'Overdue': summary.overdue_count
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # All items
             items_df = pd.DataFrame([
@@ -352,7 +371,7 @@ class PunchListManager:
                 }
                 for i in self.items.values()
             ])
-            items_df.to_excel(writer, sheet_name='All Items', index=False)
+            excel_safe(items_df).to_excel(writer, sheet_name='All Items', index=False)
 
             # By Assignee
             assignee_df = pd.DataFrame([
@@ -360,7 +379,7 @@ class PunchListManager:
                 for k, v in summary.by_assignee.items()
             ])
             if not assignee_df.empty:
-                assignee_df.to_excel(writer, sheet_name='By Assignee', index=False)
+                excel_safe(assignee_df).to_excel(writer, sheet_name='By Assignee', index=False)
 
             # Overdue
             overdue = self.get_overdue_items()
@@ -376,7 +395,7 @@ class PunchListManager:
                     }
                     for i in overdue
                 ])
-                overdue_df.to_excel(writer, sheet_name='Overdue', index=False)
+                excel_safe(overdue_df).to_excel(writer, sheet_name='Overdue', index=False)
 
         return output_path
 ```
