@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
+import bisect
 import statistics
 import math
 
@@ -241,9 +242,7 @@ class EnvironmentalMonitor:
 
     def _check_limits(self, station_id: str, parameter: ParameterType, value: float):
         """Check value against regulatory limits."""
-        # Get applicable limits
-        limits = self.REGULATORY_LIMITS.get(parameter, [])
-        limits.extend(self.custom_limits.get(parameter, []))
+        limits = self._get_limits(parameter)
 
         for limit in limits:
             if limit.averaging_period_hours == 0:
@@ -353,8 +352,7 @@ class EnvironmentalMonitor:
     def _get_compliance_status(self, parameter: ParameterType,
                               value: float) -> ComplianceStatus:
         """Determine compliance status for value."""
-        limits = self.REGULATORY_LIMITS.get(parameter, [])
-        limits.extend(self.custom_limits.get(parameter, []))
+        limits = self._get_limits(parameter)
 
         # Check instantaneous limits
         instant_limits = [l for l in limits if l.averaging_period_hours == 0]
@@ -366,36 +364,102 @@ class EnvironmentalMonitor:
 
         return ComplianceStatus.COMPLIANT
 
+    def _get_limits(self, parameter: ParameterType) -> List[RegulatoryLimit]:
+        """Regulatory and custom limits for a parameter."""
+        return (list(self.REGULATORY_LIMITS.get(parameter, []))
+                + self.custom_limits.get(parameter, []))
+
+    @staticmethod
+    def _max_window_average(readings: List[EnvironmentalReading],
+                            first_start: datetime, last_start: datetime,
+                            window: timedelta) -> Optional[float]:
+        """Highest mean over windows [s, s + window], first_start <= s <= last_start.
+
+        Each limit is judged on its own averaging period. Averaging a whole
+        reporting range would let readings outside the worst window dilute
+        an exceedance.
+        """
+        readings = sorted(readings, key=lambda r: r.timestamp)
+        times = [r.timestamp for r in readings]
+        prefix = [0.0]
+        for r in readings:
+            prefix.append(prefix[-1] + r.value)
+
+        # The set of readings in [s, s + window] only changes where s or
+        # s + window crosses a reading, so the maximum is found at those
+        # breakpoints or between two adjacent ones.
+        breakpoints = {first_start, last_start}
+        for t in times:
+            breakpoints.add(t)
+            breakpoints.add(t - window)
+        breakpoints = sorted(s for s in breakpoints
+                             if first_start <= s <= last_start)
+        starts = breakpoints + [a + (b - a) / 2
+                                for a, b in zip(breakpoints, breakpoints[1:])]
+
+        best = None
+        for s in starts:
+            lo = bisect.bisect_left(times, s)
+            hi = bisect.bisect_right(times, s + window)
+            if hi > lo:
+                mean = (prefix[hi] - prefix[lo]) / (hi - lo)
+                if best is None or mean > best:
+                    best = mean
+        return best
+
     def check_compliance(self, start_date: datetime,
                         end_date: datetime) -> List[ComplianceRecord]:
-        """Check compliance for period."""
+        """Check compliance for period.
+
+        Averaged limits use the worst window of their own averaging period
+        that lies inside the period.
+        """
+        return self._compliance_records(start_date, end_date,
+                                        windows_may_overrun=False)
+
+    def _compliance_records(self, start_date: datetime, end_date: datetime,
+                            windows_may_overrun: bool) -> List[ComplianceRecord]:
+        """Evaluate every limit for readings between start_date and end_date.
+
+        With windows_may_overrun, an averaging window that starts inside the
+        period may extend past end_date, so exposure that crosses the end of
+        the period is still measured over a full window.
+        """
         records = []
 
         for station in self.stations.values():
             for param in station.parameters:
-                limits = self.REGULATORY_LIMITS.get(param, [])
-                limits.extend(self.custom_limits.get(param, []))
+                limits = self._get_limits(param)
+
+                station_readings = [r for r in self.readings
+                                   if r.station_id == station.id
+                                   and r.parameter == param]
+                readings = [r for r in station_readings
+                           if start_date <= r.timestamp <= end_date]
+
+                if not readings:
+                    continue
 
                 for limit in limits:
-                    # Calculate average for period
-                    readings = [r for r in self.readings
-                               if r.station_id == station.id
-                               and r.parameter == param
-                               and start_date <= r.timestamp <= end_date]
-
-                    if not readings:
-                        continue
-
-                    avg_value = statistics.mean([r.value for r in readings])
-                    max_value = max(r.value for r in readings)
-
-                    # Check appropriate value
                     if limit.averaging_period_hours == 0:
-                        check_value = max_value
+                        check_value = max(r.value for r in readings)
                         period_str = "Instantaneous"
                     else:
-                        check_value = avg_value
-                        period_str = f"{limit.averaging_period_hours:.0f}-hour avg"
+                        window = timedelta(hours=limit.averaging_period_hours)
+                        if windows_may_overrun:
+                            last_start = end_date
+                            window_readings = [
+                                r for r in station_readings
+                                if start_date <= r.timestamp <= end_date + window
+                            ]
+                        else:
+                            # A period shorter than the window holds one window.
+                            last_start = max(start_date, end_date - window)
+                            window_readings = readings
+                        check_value = self._max_window_average(
+                            window_readings, start_date, last_start, window
+                        )
+                        period_str = f"{limit.averaging_period_hours:g}-hour avg"
 
                     # Determine status
                     if check_value >= limit.limit_value:
@@ -464,8 +528,10 @@ class EnvironmentalMonitor:
         day_alerts = [a for a in self.alerts
                      if date <= a.timestamp < next_day]
 
-        # Check compliance
-        compliance_records = self.check_compliance(date, next_day)
+        # Averaging windows that start today may run past midnight, so a
+        # shift that crosses midnight is not split across two reports.
+        compliance_records = self._compliance_records(date, next_day,
+                                                      windows_may_overrun=True)
         exceedances = [r for r in compliance_records
                       if r.status == ComplianceStatus.EXCEEDANCE]
 
