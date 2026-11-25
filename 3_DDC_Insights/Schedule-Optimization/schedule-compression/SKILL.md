@@ -144,21 +144,28 @@ class ScheduleCompressor:
         # Simple forward pass
         finish_times = {}
 
-        def get_finish(act_id: str) -> int:
-            if act_id in finish_times:
-                return finish_times[act_id]
-
-            act = self.activities[act_id]
-            if not act.predecessors:
-                start = 0
-            else:
-                start = max(get_finish(p) for p in act.predecessors)
-
-            finish_times[act_id] = start + act.current_duration
-            return finish_times[act_id]
-
-        for act_id in self.activities:
-            get_finish(act_id)
+        # Explicit stack: predecessor chains can be longer than Python's recursion limit.
+        for root_id in self.activities:
+            if root_id in finish_times:
+                continue
+            on_path = {root_id}
+            stack = [(root_id, iter(self.activities[root_id].predecessors))]
+            while stack:
+                act_id, pending = stack[-1]
+                for pred in pending:
+                    if pred in finish_times:
+                        continue
+                    if pred in on_path:
+                        raise ValueError(f"Predecessor cycle through activity {pred}")
+                    on_path.add(pred)
+                    stack.append((pred, iter(self.activities[pred].predecessors)))
+                    break
+                else:
+                    stack.pop()
+                    on_path.discard(act_id)
+                    act = self.activities[act_id]
+                    start = max((finish_times[p] for p in act.predecessors), default=0)
+                    finish_times[act_id] = start + act.current_duration
 
         self.project_duration = max(finish_times.values()) if finish_times else 0
         return self.project_duration
