@@ -68,6 +68,7 @@ class ExtractedClause:
     time_periods: List[str]
     risk_level: RiskLevel
     notes: str = ""
+    occurrence: int = 1  # Nth section in the document carrying this number
 
 @dataclass
 class ContractSummary:
@@ -80,6 +81,7 @@ class ContractSummary:
     clauses_by_category: Dict[str, List[ExtractedClause]]
     risk_assessment: Dict[str, str]
     action_items: List[str]
+    warnings: List[str] = field(default_factory=list)
 
 class ContractClauseExtractor:
     """Extract key clauses from construction contracts."""
@@ -154,15 +156,20 @@ class ContractClauseExtractor:
 
     def __init__(self):
         self.extracted_clauses: List[ExtractedClause] = []
+        self.warnings: List[str] = []
 
     def extract_clauses(self, contract_text: str) -> List[ExtractedClause]:
         """Extract all identifiable clauses from contract text."""
         self.extracted_clauses = []
+        self.warnings = []
 
-        # Split into articles/sections
+        # Split into articles/sections (every section is kept, in document order)
         sections = self._split_into_sections(contract_text)
 
-        for section_num, section_text in sections.items():
+        occurrences: Dict[str, int] = {}
+        for section_num, section_text in sections:
+            occurrences[section_num] = occurrences.get(section_num, 0) + 1
+
             # Identify clause category
             category = self._identify_category(section_text)
 
@@ -170,33 +177,44 @@ class ContractClauseExtractor:
                 clause = self._extract_clause_details(
                     category, section_num, section_text
                 )
+                clause.occurrence = occurrences[section_num]
                 self.extracted_clauses.append(clause)
+
+        for section_num, count in occurrences.items():
+            if count > 1 and section_num != "0":
+                self.warnings.append(
+                    f"Duplicate section number: Article/Section {section_num} appears "
+                    f"{count} times. Each occurrence was analyzed separately; confirm "
+                    f"which text governs."
+                )
 
         return self.extracted_clauses
 
-    def _split_into_sections(self, text: str) -> Dict[str, str]:
-        """Split contract into numbered sections."""
-        sections = {}
+    def _split_into_sections(self, text: str) -> List[Tuple[str, str]]:
+        """Split contract into numbered sections as ordered (number, text) pairs.
+
+        Section numbers are not unique (exhibits often restart numbering), so
+        sections must never be keyed by number alone.
+        """
+        sections: List[Tuple[str, str]] = []
 
         # Pattern for article/section headers
         header_pattern = r'(?:ARTICLE|SECTION|Article|Section)\s+(\d+(?:\.\d+)?)[:\.]?\s*([A-Z][A-Za-z\s]+)?'
 
+        # With two capture groups re.split yields:
+        # [preamble, num, title, body, num, title, body, ...]
+        # where an unmatched optional title is None.
         parts = re.split(header_pattern, text)
 
-        current_num = "0"
-        current_text = ""
+        preamble = parts[0]
+        if preamble.strip():
+            sections.append(("0", preamble))
 
-        for i, part in enumerate(parts):
-            if re.match(r'^\d+(?:\.\d+)?$', part.strip()):
-                if current_text:
-                    sections[current_num] = current_text
-                current_num = part.strip()
-                current_text = ""
-            else:
-                current_text += part
-
-        if current_text:
-            sections[current_num] = current_text
+        for i in range(1, len(parts), 3):
+            section_num = parts[i].strip()
+            title = parts[i + 1] or ""
+            body = parts[i + 2] or ""
+            sections.append((section_num, title + body))
 
         return sections
 
@@ -317,11 +335,14 @@ class ContractClauseExtractor:
         # Extract contract value
         contract_value = self._extract_contract_value(contract_text)
 
-        # Risk assessment
+        # Risk assessment (keyed per section so same-titled clauses don't collide)
         risk_assessment = {}
         for clause in clauses:
             if clause.risk_level == RiskLevel.HIGH:
-                risk_assessment[clause.title] = f"HIGH RISK: Review {clause.category.value} clause carefully"
+                risk_assessment[f"{self._section_label(clause)}: {clause.title}"] = (
+                    f"HIGH RISK: Review {clause.category.value} clause in "
+                    f"{self._section_label(clause)} carefully"
+                )
 
         # Action items
         action_items = self._generate_action_items(clauses)
@@ -335,8 +356,17 @@ class ContractClauseExtractor:
             key_dates={},
             clauses_by_category=clauses_by_category,
             risk_assessment=risk_assessment,
-            action_items=action_items
+            action_items=action_items,
+            warnings=list(self.warnings)
         )
+
+    @staticmethod
+    def _section_label(clause: ExtractedClause) -> str:
+        """Human-readable label that stays unique when a section number repeats."""
+        label = f"Article {clause.article_number}"
+        if clause.occurrence > 1:
+            label += f" (occurrence {clause.occurrence})"
+        return label
 
     def _extract_parties(self, text: str) -> Dict[str, str]:
         """Extract contract parties."""
@@ -397,7 +427,7 @@ class ContractClauseExtractor:
 
         for clause in clauses:
             if clause.risk_level == RiskLevel.HIGH:
-                actions.append(f"REVIEW: High-risk {clause.category.value} clause in Article {clause.article_number}")
+                actions.append(f"REVIEW: High-risk {clause.category.value} clause in {self._section_label(clause)}")
 
             if clause.category == ClauseCategory.INSURANCE:
                 actions.append("Verify insurance requirements meet specified limits")
@@ -408,7 +438,7 @@ class ContractClauseExtractor:
                 if clause.time_periods:
                     actions.append(f"Note payment terms: {', '.join(clause.time_periods)}")
 
-        return list(set(actions))
+        return list(dict.fromkeys(actions))
 
     def generate_report(self, summary: ContractSummary) -> str:
         """Generate contract review report."""
@@ -425,13 +455,18 @@ class ContractClauseExtractor:
         for party_type, name in summary.parties.items():
             lines.append(f"- **{party_type.title()}:** {name}")
 
+        if summary.warnings:
+            lines.extend(["", "## Warnings", ""])
+            for warning in summary.warnings:
+                lines.append(f"- ⚠️ {warning}")
+
         lines.extend(["", "## Key Clauses Summary", ""])
 
         for category, clauses in summary.clauses_by_category.items():
             lines.append(f"### {category.replace('_', ' ').title()}")
             for clause in clauses:
                 risk_indicator = "🔴" if clause.risk_level == RiskLevel.HIGH else "🟡" if clause.risk_level == RiskLevel.MEDIUM else "🟢"
-                lines.append(f"- {risk_indicator} **Article {clause.article_number}**: {clause.title}")
+                lines.append(f"- {risk_indicator} **{self._section_label(clause)}**: {clause.title}")
                 if clause.key_terms:
                     lines.append(f"  - Key terms: {', '.join(clause.key_terms)}")
             lines.append("")
