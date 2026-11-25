@@ -36,6 +36,20 @@ from pathlib import Path
 import base64
 
 
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Prefix text that a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _excel_safe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{k: _excel_safe(v) for k, v in row.items()} for row in rows]
+
+
 class PhotoType(Enum):
     """Types of construction photos."""
     PROGRESS = "progress"
@@ -351,7 +365,7 @@ class ProgressPhotoAnalyzer:
                     'Weather': result.weather_conditions
                 })
 
-            pd.DataFrame(photos_data).to_excel(writer, sheet_name='Photos', index=False)
+            pd.DataFrame(_excel_safe_rows(photos_data)).to_excel(writer, sheet_name='Photos', index=False)
 
             # Progress detections
             progress_data = []
@@ -366,7 +380,7 @@ class ProgressPhotoAnalyzer:
                     })
 
             if progress_data:
-                pd.DataFrame(progress_data).to_excel(writer, sheet_name='Progress', index=False)
+                pd.DataFrame(_excel_safe_rows(progress_data)).to_excel(writer, sheet_name='Progress', index=False)
 
             # Safety detections
             safety_data = []
@@ -381,7 +395,7 @@ class ProgressPhotoAnalyzer:
                     })
 
             if safety_data:
-                pd.DataFrame(safety_data).to_excel(writer, sheet_name='Safety', index=False)
+                pd.DataFrame(_excel_safe_rows(safety_data)).to_excel(writer, sheet_name='Safety', index=False)
 
         return output_path
 

@@ -20,6 +20,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Prefix text that a spreadsheet would evaluate as a formula."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 class PhotoCategory(Enum):
     PROGRESS = "progress"
     QUALITY = "quality"
@@ -114,6 +124,7 @@ class ProgressPhotoAnalyzer:
             'By': p.captured_by,
             'Tags': ', '.join(p.tags)
         } for p in self.photos.values()]
+        data = [{k: _excel_safe(v) for k, v in row.items()} for row in data]
         pd.DataFrame(data).to_excel(output_path, index=False)
 ```
 
