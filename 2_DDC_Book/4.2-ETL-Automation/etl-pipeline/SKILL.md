@@ -36,6 +36,36 @@ Based on DDC methodology (Chapter 4.2), this skill enables building automated da
 ```python
 import pandas as pd
 
+def excel_safe_value(value):
+    """Prefix formula-like text with ' so Excel shows it instead of running it"""
+    triggers = ('=', '+', '-', '@', '\t', '\r')
+    if isinstance(value, str) and (
+        value[:1] in triggers or value.lstrip()[:1] in triggers
+    ):
+        return "'" + value
+    return value
+
+def _excel_safe_index(index):
+    names = [excel_safe_value(name) for name in index.names]
+    if isinstance(index, pd.MultiIndex):
+        tuples = [tuple(excel_safe_value(v) for v in key) for key in index]
+        return pd.MultiIndex.from_tuples(tuples, names=names) if tuples else index.set_names(names)
+    return pd.Index([excel_safe_value(v) for v in index], name=names[0])
+
+def excel_safe(data):
+    """Copy of a DataFrame/Series that is safe to write with to_excel().
+
+    Source files (vendor PDFs, subcontractor sheets) control cell text,
+    column headers and group labels, so apply this right before every export.
+    """
+    data = data.map(excel_safe_value)
+    if isinstance(data, pd.DataFrame):
+        data.columns = _excel_safe_index(data.columns)
+    else:
+        data.name = excel_safe_value(data.name)
+    data.index = _excel_safe_index(data.index)
+    return data
+
 # Simple ETL Pipeline
 def simple_etl_pipeline(input_file, output_file):
     # EXTRACT
@@ -47,7 +77,7 @@ def simple_etl_pipeline(input_file, output_file):
     summary = df.groupby('Category')['Total'].sum()  # Aggregate
 
     # LOAD
-    summary.to_excel(output_file)
+    excel_safe(summary).to_excel(output_file)
     return summary
 
 # Run
@@ -274,15 +304,18 @@ def enrich_with_prices(df, prices_df):
 
 ### Generate Excel Report
 
+Every sheet goes through `excel_safe()` (see Quick Start), because extracted
+text such as `=HYPERLINK(...)` would otherwise be stored as a live formula.
+
 ```python
 def generate_excel_report(df, summary, output_path):
     """Generate formatted Excel report"""
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         # Raw data
-        df.to_excel(writer, sheet_name='Data', index=False)
+        excel_safe(df).to_excel(writer, sheet_name='Data', index=False)
 
         # Summary by category
-        summary.to_excel(writer, sheet_name='Summary')
+        excel_safe(summary).to_excel(writer, sheet_name='Summary')
 
         # Pivot table
         if 'Level' in df.columns and 'Category' in df.columns:
@@ -291,7 +324,7 @@ def generate_excel_report(df, summary, output_path):
                 index='Level', columns='Category',
                 aggfunc='sum', fill_value=0
             )
-            pivot.to_excel(writer, sheet_name='By_Level')
+            excel_safe(pivot).to_excel(writer, sheet_name='By_Level')
 
     print(f"Report saved: {output_path}")
 
@@ -506,7 +539,7 @@ t1 >> t2 >> t3
 | Transform | Validate | Custom validation functions |
 | Transform | Calculate | `df['new'] = df['a'] * df['b']` |
 | Transform | Aggregate | `df.groupby().agg()` |
-| Load | Excel | `df.to_excel()` |
+| Load | Excel | `excel_safe(df).to_excel()` |
 | Load | PDF | `reportlab` |
 | Load | Database | `df.to_sql()` |
 | Load | API | `requests.post()` |
