@@ -35,6 +35,20 @@ class DelayCause(Enum):
     OTHER = "other"
 
 
+# Leading characters that make Excel, LibreOffice or Google Sheets treat a cell
+# as a formula, including their full-width forms.
+FORMULA_MARKERS = ('=', '+', '-', '@', '\t', '\r', '\n',
+                   '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def as_cell_text(value: Any) -> Any:
+    """Return value so a spreadsheet stores it as text, never as a formula."""
+    if isinstance(value, str) and (value.startswith(FORMULA_MARKERS)
+                                   or value.lstrip().startswith(FORMULA_MARKERS)):
+        return "'" + value
+    return value
+
+
 @dataclass
 class DelayEvent:
     delay_id: str
@@ -165,6 +179,9 @@ class ScheduleDelayAnalyzer:
             'Cost Impact': d.cost_impact,
             'Description': d.description
         } for d in self.delays.values()]
+        # Delay text comes from contractor notices; escape it so opening the
+        # workbook cannot evaluate it as a formula.
+        data = [{k: as_cell_text(v) for k, v in row.items()} for row in data]
         pd.DataFrame(data).to_excel(output_path, index=False)
 ```
 
