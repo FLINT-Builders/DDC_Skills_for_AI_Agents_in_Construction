@@ -23,6 +23,86 @@ The conversion follows the ETL pattern:
 2. **Transform**: Parse and structure the content
 3. **Load**: Save to CSV, Excel, or JSON
 
+## Untrusted PDF Text in Spreadsheets
+
+Whoever wrote the PDF controls every extracted header and cell. Excel runs any cell that starts with a formula character (`=`, `+`, `-`, `@`), so a cell such as `=SUM(...)` or an external workbook link would run when the output is opened. Every extractor in this skill returns a `SpreadsheetSafeFrame`, which keeps the extracted text unchanged for analysis and writes formula-like values as text from `to_excel` and `to_csv`. Define these classes before the examples below, and write extracted data through the frame or its columns, not by passing raw values to openpyxl or `df.style`.
+
+```python
+import pandas as pd
+
+class SpreadsheetSafeSeries(pd.Series):
+    """Column of a SpreadsheetSafeFrame; exports through the frame."""
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeSeries
+
+    @property
+    def _constructor_expanddim(self):
+        return SpreadsheetSafeFrame
+
+    def to_excel(self, *args, **kwargs):
+        return self.to_frame().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.to_frame().to_csv(*args, **kwargs)
+
+class SpreadsheetSafeFrame(pd.DataFrame):
+    """DataFrame of untrusted document text.
+
+    Whoever authored the PDF controls every header and cell. Excel runs any
+    cell that starts with a formula character, so to_excel and to_csv write
+    such headers, labels and cells as text (prefixed with an apostrophe).
+    """
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeFrame
+
+    @property
+    def _constructor_sliced(self):
+        return SpreadsheetSafeSeries
+
+    @staticmethod
+    def neutralize(value):
+        if isinstance(value, tuple):
+            return tuple(SpreadsheetSafeFrame.neutralize(part) for part in value)
+        if not isinstance(value, str):
+            return value
+        try:
+            float(value)
+            return value  # plain numbers such as "-150" are not formulas
+        except ValueError:
+            pass
+        first = value.lstrip()[:1]
+        if value[:1] in ("\t", "\r", "\n") or (first and first in "=+-@＝＋－＠"):
+            return "'" + value
+        return value
+
+    def spreadsheet_ready(self):
+        """Plain DataFrame copy that spreadsheet apps read as text only."""
+        safe = pd.DataFrame(self, copy=True)
+        for position in range(safe.shape[1]):
+            column = safe.iloc[:, position]
+            if column.dtype.kind not in "biufcmM":
+                safe.isetitem(position, column.astype(object).map(self.neutralize).to_numpy())
+        safe.columns = self._neutralize_labels(safe.columns)
+        safe.index = self._neutralize_labels(safe.index)
+        return safe
+
+    @classmethod
+    def _neutralize_labels(cls, labels):
+        neutral = labels.map(cls.neutralize)
+        neutral.names = [cls.neutralize(name) for name in labels.names]
+        return neutral
+
+    def to_excel(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_csv(*args, **kwargs)
+```
+
 ## Quick Start
 
 ```python
@@ -33,7 +113,7 @@ import pandas as pd
 with pdfplumber.open("construction_spec.pdf") as pdf:
     page = pdf.pages[0]
     table = page.extract_table()
-    df = pd.DataFrame(table[1:], columns=table[0])
+    df = SpreadsheetSafeFrame(table[1:], columns=table[0])
     df.to_excel("extracted_data.xlsx", index=False)
 ```
 
@@ -69,14 +149,14 @@ def extract_tables_from_pdf(pdf_path):
             for table_num, table in enumerate(tables):
                 if table and len(table) > 1:
                     # First row as header
-                    df = pd.DataFrame(table[1:], columns=table[0])
+                    df = SpreadsheetSafeFrame(table[1:], columns=table[0])
                     df['_page'] = page_num + 1
                     df['_table'] = table_num + 1
                     all_tables.append(df)
 
     if all_tables:
-        return pd.concat(all_tables, ignore_index=True)
-    return pd.DataFrame()
+        return SpreadsheetSafeFrame(pd.concat(all_tables, ignore_index=True))
+    return SpreadsheetSafeFrame()
 
 # Usage
 df = extract_tables_from_pdf("material_specification.pdf")
@@ -127,8 +207,8 @@ def extract_table_from_area(pdf_path, page_num, bbox):
         table = cropped.extract_table()
 
         if table:
-            return pd.DataFrame(table[1:], columns=table[0])
-    return pd.DataFrame()
+            return SpreadsheetSafeFrame(table[1:], columns=table[0])
+    return SpreadsheetSafeFrame()
 
 # Usage - extract table from specific area
 # bbox format: (left, top, right, bottom) in points (1 inch = 72 points)
@@ -163,7 +243,7 @@ def ocr_scanned_pdf(pdf_path, language='eng'):
             'text': text
         })
 
-    return pd.DataFrame(extracted_text)
+    return SpreadsheetSafeFrame(extracted_text)
 
 # Usage
 df = ocr_scanned_pdf("scanned_specification.pdf", language='eng')
@@ -202,9 +282,9 @@ def ocr_table_from_scanned_pdf(pdf_path, page_num=0):
 
     if data:
         # Assume first row is header
-        df = pd.DataFrame(data[1:], columns=data[0] if len(data[0]) > 0 else None)
+        df = SpreadsheetSafeFrame(data[1:], columns=data[0] if len(data[0]) > 0 else None)
         return df
-    return pd.DataFrame()
+    return SpreadsheetSafeFrame()
 
 # Usage
 df = ocr_table_from_scanned_pdf("scanned_bom.pdf")
@@ -243,7 +323,7 @@ def extract_bom_from_pdf(pdf_path):
                                 all_items.append(item)
                         break
 
-    return pd.DataFrame(all_items)
+    return SpreadsheetSafeFrame(all_items)
 
 # Usage
 bom = extract_bom_from_pdf("project_bom.pdf")
@@ -279,7 +359,7 @@ def extract_schedule_from_pdf(pdf_path):
                             task = dict(zip(headers, row))
                             all_tasks.append(task)
 
-    df = pd.DataFrame(all_tasks)
+    df = SpreadsheetSafeFrame(all_tasks)
 
     # Try to parse dates
     date_columns = ['Start', 'End', 'Start Date', 'End Date', 'Finish']
@@ -323,7 +403,7 @@ def parse_specification_pdf(pdf_path):
             'level': len(num.split('.'))
         })
 
-    return pd.DataFrame(specs)
+    return SpreadsheetSafeFrame(specs)
 
 # Usage
 specs = parse_specification_pdf("technical_spec.pdf")
@@ -352,7 +432,7 @@ def batch_extract_tables(folder_path, output_folder):
                     tables = page.extract_tables()
                     for table_num, table in enumerate(tables):
                         if table and len(table) > 1:
-                            df = pd.DataFrame(table[1:], columns=table[0])
+                            df = SpreadsheetSafeFrame(table[1:], columns=table[0])
                             df['_source_file'] = pdf_path.name
                             df['_page'] = page_num + 1
 
@@ -365,7 +445,7 @@ def batch_extract_tables(folder_path, output_folder):
 
     # Combined output
     if results:
-        combined = pd.concat(results, ignore_index=True)
+        combined = SpreadsheetSafeFrame(pd.concat(results, ignore_index=True))
         combined.to_excel(Path(output_folder) / "all_tables.xlsx", index=False)
 
     return len(results)

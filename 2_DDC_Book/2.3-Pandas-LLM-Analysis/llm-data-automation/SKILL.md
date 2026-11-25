@@ -96,6 +96,78 @@ export to Excel with formatting"
 import pdfplumber
 import pandas as pd
 
+class SpreadsheetSafeSeries(pd.Series):
+    """Column of a SpreadsheetSafeFrame; exports through the frame."""
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeSeries
+
+    @property
+    def _constructor_expanddim(self):
+        return SpreadsheetSafeFrame
+
+    def to_excel(self, *args, **kwargs):
+        return self.to_frame().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.to_frame().to_csv(*args, **kwargs)
+
+class SpreadsheetSafeFrame(pd.DataFrame):
+    """DataFrame of untrusted document text.
+
+    Whoever authored the PDF controls every header and cell. Excel runs any
+    cell that starts with a formula character, so to_excel and to_csv write
+    such headers, labels and cells as text (prefixed with an apostrophe).
+    """
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeFrame
+
+    @property
+    def _constructor_sliced(self):
+        return SpreadsheetSafeSeries
+
+    @staticmethod
+    def neutralize(value):
+        if isinstance(value, tuple):
+            return tuple(SpreadsheetSafeFrame.neutralize(part) for part in value)
+        if not isinstance(value, str):
+            return value
+        try:
+            float(value)
+            return value  # plain numbers such as "-150" are not formulas
+        except ValueError:
+            pass
+        first = value.lstrip()[:1]
+        if value[:1] in ("\t", "\r", "\n") or (first and first in "=+-@＝＋－＠"):
+            return "'" + value
+        return value
+
+    def spreadsheet_ready(self):
+        """Plain DataFrame copy that spreadsheet apps read as text only."""
+        safe = pd.DataFrame(self, copy=True)
+        for position in range(safe.shape[1]):
+            column = safe.iloc[:, position]
+            if column.dtype.kind not in "biufcmM":
+                safe.isetitem(position, column.astype(object).map(self.neutralize).to_numpy())
+        safe.columns = self._neutralize_labels(safe.columns)
+        safe.index = self._neutralize_labels(safe.index)
+        return safe
+
+    @classmethod
+    def _neutralize_labels(cls, labels):
+        neutral = labels.map(cls.neutralize)
+        neutral.names = [cls.neutralize(name) for name in labels.names]
+        return neutral
+
+    def to_excel(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_csv(*args, **kwargs)
+
 def pdf_to_dataframe(pdf_path):
     """Extract tables from PDF file"""
     all_tables = []
@@ -108,13 +180,15 @@ def pdf_to_dataframe(pdf_path):
                     all_tables.append(df)
 
     if all_tables:
-        return pd.concat(all_tables, ignore_index=True)
-    return pd.DataFrame()
+        return SpreadsheetSafeFrame(pd.concat(all_tables, ignore_index=True))
+    return SpreadsheetSafeFrame()
 
 # Usage
 df = pdf_to_dataframe("construction_spec.pdf")
 df.to_excel("extracted_data.xlsx", index=False)
 ```
+
+PDF headers and cells come from whoever wrote the document. Keep extracted data in a `SpreadsheetSafeFrame` until it is written, so a cell such as `=SUM(...)` or an external workbook link is saved as text instead of a formula Excel runs on open. Write the frame or its columns with `to_excel`/`to_csv`, not by passing raw values to openpyxl or `df.style`.
 
 ### 2. Process BIM Element Data
 ```python

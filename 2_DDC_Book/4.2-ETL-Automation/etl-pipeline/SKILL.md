@@ -86,9 +86,83 @@ df = extract_excel_files("./project_data/")
 
 ### From PDF Documents
 
+PDF headers and cells come from whoever wrote the document. `extract_from_pdfs` returns a `SpreadsheetSafeFrame` so that a cell such as `=SUM(...)` or an external workbook link is written as text, not as a formula Excel runs on open, when the data is later loaded with `to_excel` or `to_csv`. Keep PDF data in this frame through the pipeline, and do not pass its raw values to openpyxl or `df.style`.
+
 ```python
 import pdfplumber
 import pandas as pd
+
+class SpreadsheetSafeSeries(pd.Series):
+    """Column of a SpreadsheetSafeFrame; exports through the frame."""
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeSeries
+
+    @property
+    def _constructor_expanddim(self):
+        return SpreadsheetSafeFrame
+
+    def to_excel(self, *args, **kwargs):
+        return self.to_frame().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.to_frame().to_csv(*args, **kwargs)
+
+class SpreadsheetSafeFrame(pd.DataFrame):
+    """DataFrame of untrusted document text.
+
+    Whoever authored the PDF controls every header and cell. Excel runs any
+    cell that starts with a formula character, so to_excel and to_csv write
+    such headers, labels and cells as text (prefixed with an apostrophe).
+    """
+
+    @property
+    def _constructor(self):
+        return SpreadsheetSafeFrame
+
+    @property
+    def _constructor_sliced(self):
+        return SpreadsheetSafeSeries
+
+    @staticmethod
+    def neutralize(value):
+        if isinstance(value, tuple):
+            return tuple(SpreadsheetSafeFrame.neutralize(part) for part in value)
+        if not isinstance(value, str):
+            return value
+        try:
+            float(value)
+            return value  # plain numbers such as "-150" are not formulas
+        except ValueError:
+            pass
+        first = value.lstrip()[:1]
+        if value[:1] in ("\t", "\r", "\n") or (first and first in "=+-@＝＋－＠"):
+            return "'" + value
+        return value
+
+    def spreadsheet_ready(self):
+        """Plain DataFrame copy that spreadsheet apps read as text only."""
+        safe = pd.DataFrame(self, copy=True)
+        for position in range(safe.shape[1]):
+            column = safe.iloc[:, position]
+            if column.dtype.kind not in "biufcmM":
+                safe.isetitem(position, column.astype(object).map(self.neutralize).to_numpy())
+        safe.columns = self._neutralize_labels(safe.columns)
+        safe.index = self._neutralize_labels(safe.index)
+        return safe
+
+    @classmethod
+    def _neutralize_labels(cls, labels):
+        neutral = labels.map(cls.neutralize)
+        neutral.names = [cls.neutralize(name) for name in labels.names]
+        return neutral
+
+    def to_excel(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_excel(*args, **kwargs)
+
+    def to_csv(self, *args, **kwargs):
+        return self.spreadsheet_ready().to_csv(*args, **kwargs)
 
 def extract_from_pdfs(pdf_folder):
     """Extract tables from all PDFs in folder"""
@@ -105,7 +179,9 @@ def extract_from_pdfs(pdf_folder):
                         df['_source'] = pdf_path.name
                         all_tables.append(df)
 
-    return pd.concat(all_tables, ignore_index=True) if all_tables else pd.DataFrame()
+    if all_tables:
+        return SpreadsheetSafeFrame(pd.concat(all_tables, ignore_index=True))
+    return SpreadsheetSafeFrame()
 ```
 
 ### From API
