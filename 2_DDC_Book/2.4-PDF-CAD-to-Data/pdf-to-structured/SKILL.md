@@ -29,13 +29,30 @@ The conversion follows the ETL pattern:
 import pdfplumber
 import pandas as pd
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 # Extract table from PDF
 with pdfplumber.open("construction_spec.pdf") as pdf:
     page = pdf.pages[0]
     table = page.extract_table()
     df = pd.DataFrame(table[1:], columns=table[0])
-    df.to_excel("extracted_data.xlsx", index=False)
+    escape_formulas(df).to_excel("extracted_data.xlsx", index=False)
 ```
+
+PDF text is untrusted input: always pass extracted tables through `escape_formulas` before writing Excel or CSV, so a cell like `=HYPERLINK(...)` stays text instead of running when the file is opened.
 
 ## Installation
 
@@ -59,6 +76,21 @@ pip install pypdf
 import pdfplumber
 import pandas as pd
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def extract_tables_from_pdf(pdf_path):
     """Extract all tables from a PDF file"""
     all_tables = []
@@ -80,7 +112,7 @@ def extract_tables_from_pdf(pdf_path):
 
 # Usage
 df = extract_tables_from_pdf("material_specification.pdf")
-df.to_excel("materials.xlsx", index=False)
+escape_formulas(df).to_excel("materials.xlsx", index=False)
 ```
 
 ### Extract Text with Layout
@@ -144,6 +176,21 @@ import pytesseract
 from pdf2image import convert_from_path
 import pandas as pd
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def ocr_scanned_pdf(pdf_path, language='eng'):
     """
     Extract text from scanned PDF using OCR
@@ -167,7 +214,7 @@ def ocr_scanned_pdf(pdf_path, language='eng'):
 
 # Usage
 df = ocr_scanned_pdf("scanned_specification.pdf", language='eng')
-df.to_csv("ocr_results.csv", index=False)
+escape_formulas(df).to_csv("ocr_results.csv", index=False)
 ```
 
 ### OCR Table Extraction
@@ -220,6 +267,21 @@ import pdfplumber
 import pandas as pd
 import re
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def extract_bom_from_pdf(pdf_path):
     """Extract Bill of Materials from construction PDF"""
     all_items = []
@@ -247,7 +309,7 @@ def extract_bom_from_pdf(pdf_path):
 
 # Usage
 bom = extract_bom_from_pdf("project_bom.pdf")
-bom.to_excel("bom_extracted.xlsx", index=False)
+escape_formulas(bom).to_excel("bom_extracted.xlsx", index=False)
 ```
 
 ### Project Schedule Extraction
@@ -339,6 +401,21 @@ import pdfplumber
 import pandas as pd
 from pathlib import Path
 
+def escape_formulas(df):
+    """Store PDF text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def batch_extract_tables(folder_path, output_folder):
     """Process all PDFs in folder and extract tables"""
     pdf_files = Path(folder_path).glob("*.pdf")
@@ -358,7 +435,7 @@ def batch_extract_tables(folder_path, output_folder):
 
                             # Save individual table
                             output_name = f"{pdf_path.stem}_p{page_num+1}_t{table_num+1}.xlsx"
-                            df.to_excel(Path(output_folder) / output_name, index=False)
+                            escape_formulas(df).to_excel(Path(output_folder) / output_name, index=False)
                             results.append(df)
         except Exception as e:
             print(f"Error processing {pdf_path.name}: {e}")
@@ -366,7 +443,7 @@ def batch_extract_tables(folder_path, output_folder):
     # Combined output
     if results:
         combined = pd.concat(results, ignore_index=True)
-        combined.to_excel(Path(output_folder) / "all_tables.xlsx", index=False)
+        escape_formulas(combined).to_excel(Path(output_folder) / "all_tables.xlsx", index=False)
 
     return len(results)
 
@@ -404,7 +481,7 @@ def clean_extracted_data(df):
 # Usage
 df = extract_tables_from_pdf("document.pdf")
 df_clean = clean_extracted_data(df)
-df_clean.to_excel("clean_data.xlsx", index=False)
+escape_formulas(df_clean).to_excel("clean_data.xlsx", index=False)
 ```
 
 ## Export Options
@@ -415,13 +492,12 @@ import json
 
 def export_to_multiple_formats(df, base_name):
     """Export DataFrame to multiple formats"""
-    # Excel
-    df.to_excel(f"{base_name}.xlsx", index=False)
+    # Excel and CSV run formulas when opened, so escape them (escape_formulas is defined above)
+    safe = escape_formulas(df)
+    safe.to_excel(f"{base_name}.xlsx", index=False)
+    safe.to_csv(f"{base_name}.csv", index=False, encoding='utf-8-sig')
 
-    # CSV
-    df.to_csv(f"{base_name}.csv", index=False, encoding='utf-8-sig')
-
-    # JSON
+    # JSON keeps the original text
     df.to_json(f"{base_name}.json", orient='records', indent=2)
 
     # JSON Lines (for large datasets)

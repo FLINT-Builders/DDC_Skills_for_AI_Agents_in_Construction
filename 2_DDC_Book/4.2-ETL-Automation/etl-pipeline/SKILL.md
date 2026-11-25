@@ -275,14 +275,30 @@ def enrich_with_prices(df, prices_df):
 ### Generate Excel Report
 
 ```python
+def escape_formulas(df):
+    """Store source text that a spreadsheet would run as a formula as plain text"""
+    def escape(value):
+        if isinstance(value, tuple):
+            return tuple(escape(v) for v in value)
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "{", "\t", "\r")):
+            return "'" + value
+        return value
+    df = df.apply(lambda col: col.map(escape))
+    for axis in ("index", "columns"):
+        labels = getattr(df, axis).map(escape)
+        labels.names = [escape(name) for name in labels.names]
+        setattr(df, axis, labels)
+    return df
+
 def generate_excel_report(df, summary, output_path):
     """Generate formatted Excel report"""
+    # Extracted PDF/Excel text is untrusted: escape every sheet before writing
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         # Raw data
-        df.to_excel(writer, sheet_name='Data', index=False)
+        escape_formulas(df).to_excel(writer, sheet_name='Data', index=False)
 
         # Summary by category
-        summary.to_excel(writer, sheet_name='Summary')
+        escape_formulas(summary).to_excel(writer, sheet_name='Summary')
 
         # Pivot table
         if 'Level' in df.columns and 'Category' in df.columns:
@@ -291,7 +307,7 @@ def generate_excel_report(df, summary, output_path):
                 index='Level', columns='Category',
                 aggfunc='sum', fill_value=0
             )
-            pivot.to_excel(writer, sheet_name='By_Level')
+            escape_formulas(pivot).to_excel(writer, sheet_name='By_Level')
 
     print(f"Report saved: {output_path}")
 
