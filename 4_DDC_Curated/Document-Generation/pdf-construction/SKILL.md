@@ -90,6 +90,14 @@ def extract_spec_sections(pdf_path: str) -> dict:
     """Extract specification sections by division."""
     sections = {}
 
+    def store(section_num, lines):
+        # A section number can repeat (page headers, addenda); never drop earlier text.
+        text = '\n'.join(lines)
+        if section_num in sections:
+            sections[section_num] += '\n' + text
+        else:
+            sections[section_num] = text
+
     with pdfplumber.open(pdf_path) as pdf:
         current_section = None
         current_text = []
@@ -103,14 +111,14 @@ def extract_spec_sections(pdf_path: str) -> dict:
                 match = re.match(r'^(\d{2}\s?\d{2}\s?\d{2})\s*[-–]\s*(.+)$', line)
                 if match:
                     if current_section:
-                        sections[current_section] = '\n'.join(current_text)
+                        store(current_section, current_text)
                     current_section = match.group(1).replace(' ', '')
                     current_text = [match.group(2)]
                 elif current_section:
                     current_text.append(line)
 
         if current_section:
-            sections[current_section] = '\n'.join(current_text)
+            store(current_section, current_text)
 
     return sections
 ```
