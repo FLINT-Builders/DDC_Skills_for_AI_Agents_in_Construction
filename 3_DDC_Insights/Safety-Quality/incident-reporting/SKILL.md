@@ -36,6 +36,7 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, timedelta
 import json
+import uuid
 
 class IncidentType(Enum):
     NEAR_MISS = "near_miss"
@@ -141,6 +142,10 @@ class IncidentManager:
         self.incidents: Dict[str, Incident] = {}
         self.corrective_actions: Dict[str, CorrectiveAction] = {}
 
+    @staticmethod
+    def _new_id(prefix: str) -> str:
+        return f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+
     def report_incident(self, incident_type: IncidentType,
                        category: IncidentCategory,
                        date_time: datetime,
@@ -152,7 +157,7 @@ class IncidentManager:
                        reported_by: str,
                        injured_person: Dict = None) -> Incident:
         """Report new incident."""
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        incident_id = self._new_id("INC")
 
         injured = None
         if injured_person:
@@ -178,7 +183,9 @@ class IncidentManager:
                             IncidentType.FATALITY]:
             incident.osha_recordable = True
 
-        self.incidents[incident_id] = incident
+        # Never replace an existing record under the same id.
+        if self.incidents.setdefault(incident_id, incident) is not incident:
+            raise ValueError(f"Incident {incident_id} already exists")
         return incident
 
     def add_witness(self, incident_id: str, witness: Dict) -> Incident:
@@ -234,7 +241,8 @@ class IncidentManager:
         if incident_id not in self.incidents:
             raise ValueError(f"Incident {incident_id} not found")
 
-        action_id = f"CA-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        incident = self.incidents[incident_id]
+        action_id = self._new_id("CA")
         action = CorrectiveAction(
             id=action_id,
             description=description,
@@ -242,9 +250,11 @@ class IncidentManager:
             due_date=datetime.now() + timedelta(days=due_days)
         )
 
-        self.incidents[incident_id].corrective_actions.append(action)
-        self.incidents[incident_id].status = InvestigationStatus.CORRECTIVE_ACTIONS_ASSIGNED
-        self.corrective_actions[action_id] = action
+        # Register first so a duplicate id is refused before the incident is touched.
+        if self.corrective_actions.setdefault(action_id, action) is not action:
+            raise ValueError(f"Corrective action {action_id} already exists")
+        incident.corrective_actions.append(action)
+        incident.status = InvestigationStatus.CORRECTIVE_ACTIONS_ASSIGNED
         return action
 
     def complete_corrective_action(self, action_id: str,
