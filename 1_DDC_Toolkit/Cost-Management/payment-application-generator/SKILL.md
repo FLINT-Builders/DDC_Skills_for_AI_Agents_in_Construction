@@ -27,6 +27,7 @@ Automated payment application generation with schedule of values tracking, reten
 ## Technical Implementation
 
 ```python
+import math
 import pandas as pd
 from datetime import datetime, date
 from typing import Dict, Any, List, Optional
@@ -155,6 +156,13 @@ class PaymentApplicationGenerator:
 
     def add_change_order(self, amount: float, description: str, item_number: str = None):
         """Add approved change order to contract."""
+        if item_number and item_number in self.sov_items:
+            sov = self.sov_items[item_number]
+            if sov.scheduled_value + amount < sov.total_completed_current:
+                raise ValueError(
+                    f"Change order would reduce item {item_number} below "
+                    f"the {sov.total_completed_current:,.2f} already billed")
+
         self.change_orders_total += amount
 
         if item_number:
@@ -195,13 +203,17 @@ class PaymentApplicationGenerator:
                 total_completed_previous=sov.total_completed_current
             )
 
-            # Apply current period progress
+            # Apply current period progress, capped so completed and stored
+            # to date never exceeds the line's scheduled value
             if item_num in progress:
                 prog = progress[item_num]
-                if 'work' in prog:
-                    updated_sov.work_completed_current = prog['work']
-                if 'materials' in prog:
-                    updated_sov.materials_stored_current = prog['materials']
+                work = self._progress_amount(item_num, prog, 'work')
+                materials = self._progress_amount(item_num, prog, 'materials')
+                remaining = max(0.0, updated_sov.scheduled_value - (
+                    updated_sov.work_completed_previous + updated_sov.materials_stored_previous))
+                updated_sov.work_completed_current = min(work, remaining)
+                updated_sov.materials_stored_current = min(
+                    materials, remaining - updated_sov.work_completed_current)
 
             items_copy.append(updated_sov)
 
@@ -232,6 +244,18 @@ class PaymentApplicationGenerator:
 
         self.applications.append(application)
         return application
+
+    @staticmethod
+    def _progress_amount(item_num: str, prog: Dict[str, float], key: str) -> float:
+        """Read a progress amount, rejecting negative or non-finite values."""
+        value = prog.get(key, 0)
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Item {item_num}: {key} must be a number, got {value!r}")
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError(f"Item {item_num}: {key} must be a finite, non-negative amount")
+        return amount
 
     def calculate_payment_due(self, application: PaymentApplication,
                              previous_payments: float = None) -> Dict[str, float]:
