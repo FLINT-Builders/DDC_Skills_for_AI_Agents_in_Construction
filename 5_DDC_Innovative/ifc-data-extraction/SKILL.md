@@ -349,6 +349,35 @@ class IFCGeometryExtractor:
 ### Export to Various Formats
 
 ```python
+# Leading characters that Excel, LibreOffice Calc, or Google Sheets treat as
+# the start of a formula (including full-width forms some locales accept).
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def neutralize_formula(value):
+    """Prefix model text that a spreadsheet would run as a formula with an apostrophe."""
+    if not isinstance(value, str) or not value:
+        return value
+    if value[0] in FORMULA_TRIGGERS or value.lstrip()[:1] in FORMULA_TRIGGERS:
+        return "'" + value
+    return value
+
+
+def spreadsheet_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df whose text cells and headers cannot be evaluated as formulas.
+
+    IFC names, descriptions, GlobalIds, and other strings come from whoever
+    authored the model, so every spreadsheet export must pass through here.
+    """
+    safe = df.copy()
+    safe.columns = [neutralize_formula(col) for col in safe.columns]
+    for i in range(safe.shape[1]):
+        column = safe.iloc[:, i]
+        if not pd.api.types.is_numeric_dtype(column):
+            safe.isetitem(i, column.map(neutralize_formula))
+    return safe
+
+
 class IFCExporter:
     """Export IFC data to various formats"""
 
@@ -357,31 +386,17 @@ class IFCExporter:
 
     def to_excel(self, output_path: str, include_all: bool = True):
         """Export to Excel with multiple sheets"""
+        sheets = {'Project': pd.DataFrame([self.extractor.get_project_info()])}
+        if include_all:
+            sheets['Elements'] = self.extractor.get_all_elements()
+        sheets['Quantities'] = self.extractor.extract_quantities()
+        sheets['Levels'] = self.extractor.extract_levels()
+        sheets['Spaces'] = self.extractor.extract_spaces()
+        sheets['Materials'] = self.extractor.extract_materials()
+
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            # Project info
-            project_info = pd.DataFrame([self.extractor.get_project_info()])
-            project_info.to_excel(writer, sheet_name='Project', index=False)
-
-            # All elements
-            if include_all:
-                elements = self.extractor.get_all_elements()
-                elements.to_excel(writer, sheet_name='Elements', index=False)
-
-            # Quantities
-            quantities = self.extractor.extract_quantities()
-            quantities.to_excel(writer, sheet_name='Quantities', index=False)
-
-            # Levels
-            levels = self.extractor.extract_levels()
-            levels.to_excel(writer, sheet_name='Levels', index=False)
-
-            # Spaces
-            spaces = self.extractor.extract_spaces()
-            spaces.to_excel(writer, sheet_name='Spaces', index=False)
-
-            # Materials
-            materials = self.extractor.extract_materials()
-            materials.to_excel(writer, sheet_name='Materials', index=False)
+            for sheet_name, df in sheets.items():
+                spreadsheet_safe(df).to_excel(writer, sheet_name=sheet_name, index=False)
 
         return output_path
 
@@ -399,7 +414,7 @@ class IFCExporter:
         }
 
         for filename, df in exports.items():
-            df.to_csv(os.path.join(output_dir, filename), index=False)
+            spreadsheet_safe(df).to_csv(os.path.join(output_dir, filename), index=False)
 
         return output_dir
 
