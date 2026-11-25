@@ -24,7 +24,7 @@ This skill implements AI-powered contractor matching for construction projects. 
 ```python
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
-from datetime import date
+from datetime import date, datetime
 import numpy as np
 
 @dataclass
@@ -32,7 +32,7 @@ class Contractor:
     contractor_id: str
     name: str
     specializations: List[str]
-    certifications: List[str]
+    certifications: List[Dict]  # {name, valid_until: date}; no valid_until = not current
     performance_score: float  # 0-100
     safety_score: float  # 0-100
     regions: List[str]
@@ -48,11 +48,25 @@ class ProjectRequirement:
     estimated_value: float
     priority: str  # cost, quality, speed, safety
 
+def current_cert_names(certifications: List[Dict], as_of: date) -> set:
+    """Names of certifications whose valid_until is a date on or after as_of"""
+    names = set()
+    for cert in certifications:
+        if not isinstance(cert, dict):
+            continue
+        expiry = cert.get('valid_until')
+        if isinstance(expiry, datetime):
+            expiry = expiry.date()
+        if isinstance(cert.get('name'), str) and type(expiry) is date and expiry >= as_of:
+            names.add(cert['name'])
+    return names
+
 def match_contractors(project: ProjectRequirement,
                      contractors: List[Contractor],
                      top_n: int = 5) -> List[Dict]:
     """Simple contractor matching"""
     scores = []
+    today = date.today()
 
     for c in contractors:
         # Check basic eligibility
@@ -63,7 +77,7 @@ def match_contractors(project: ProjectRequirement,
         if work_match == 0:
             continue
 
-        cert_match = len(set(project.required_certs) & set(c.certifications))
+        cert_match = len(set(project.required_certs) & current_cert_names(c.certifications, today))
         if cert_match < len(project.required_certs):
             continue
 
@@ -90,9 +104,12 @@ def match_contractors(project: ProjectRequirement,
 
 # Example
 contractors = [
-    Contractor("C001", "ABC Builders", ["concrete", "structural"], ["ISO9001", "OHSAS18001"],
+    Contractor("C001", "ABC Builders", ["concrete", "structural"],
+              [{"name": "ISO9001", "valid_until": date(2028, 6, 30)},
+               {"name": "OHSAS18001", "valid_until": date(2028, 6, 30)}],
               85, 90, ["Moscow", "SPB"], 60, -5),
-    Contractor("C002", "XYZ Construction", ["concrete", "finishing"], ["ISO9001"],
+    Contractor("C002", "XYZ Construction", ["concrete", "finishing"],
+              [{"name": "ISO9001", "valid_until": date(2029, 1, 31)}],
               78, 85, ["Moscow"], 80, 10),
 ]
 
@@ -165,6 +182,7 @@ class ContractorProfile:
     min_project_value: float
 
     # Certifications
+    # valid_until must be a date; a credential without one never counts toward eligibility
     certifications: List[Dict]  # {name, issuer, valid_until}
     licenses: List[Dict]  # {type, number, region, valid_until}
 
@@ -239,6 +257,7 @@ class ContractorProfile:
 ### AI Matching Engine
 
 ```python
+from datetime import date, datetime
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 import pandas as pd
@@ -307,6 +326,7 @@ class ContractorMatchingEngine:
     def _filter_eligible(self, req: ProjectRequirements) -> List[ContractorProfile]:
         """Filter contractors by basic eligibility"""
         eligible = []
+        today = date.today()
 
         for contractor in self.contractors.values():
             # Check region
@@ -327,14 +347,14 @@ class ContractorMatchingEngine:
                 continue
 
             # Check certifications
-            contractor_certs = set(c['name'] for c in contractor.certifications
-                                  if c.get('valid_until', date.max) >= date.today())
+            contractor_certs = self._current_credential_names(
+                contractor.certifications, 'name', today)
             if not set(req.required_certifications).issubset(contractor_certs):
                 continue
 
             # Check licenses
-            contractor_licenses = set(l['type'] for l in contractor.licenses
-                                     if l.get('valid_until', date.max) >= date.today())
+            contractor_licenses = self._current_credential_names(
+                contractor.licenses, 'type', today)
             if not set(req.required_licenses).issubset(contractor_licenses):
                 continue
 
@@ -349,6 +369,28 @@ class ContractorMatchingEngine:
             eligible.append(contractor)
 
         return eligible
+
+    @staticmethod
+    def _current_credential_names(credentials: List[Dict], name_key: str,
+                                  as_of: date) -> set:
+        """Names of credentials whose valid_until is a date on or after as_of.
+
+        A missing, empty, or non-date valid_until never counts as current.
+        """
+        names = set()
+        for cred in credentials or []:
+            if not isinstance(cred, dict):
+                continue
+            name = cred.get(name_key)
+            expiry = cred.get('valid_until')
+            if isinstance(expiry, datetime):
+                expiry = expiry.date()
+            # Exact type check: pandas NaT passes isinstance(date) but is not comparable
+            if not isinstance(name, str) or type(expiry) is not date:
+                continue
+            if expiry >= as_of:
+                names.add(name)
+        return names
 
     def _calculate_match_score(self, contractor: ContractorProfile,
                               req: ProjectRequirements) -> Tuple[float, Dict]:
