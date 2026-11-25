@@ -519,6 +519,18 @@ class ComplianceChecker:
                     'issue': 'Exceeds maximum U-value'
                 })
 
+        # Check floors
+        for floor in building.floors:
+            u_value = floor['assembly'].u_value
+            if u_value > self.requirements.floor_u_max:
+                results['compliant'] = False
+                results['issues'].append({
+                    'element': f"Floor {floor['zone']}",
+                    'actual': u_value,
+                    'required': self.requirements.floor_u_max,
+                    'issue': 'Exceeds maximum U-value'
+                })
+
         return results
 
     def check_lighting(self, zones: List[Zone]) -> Dict:
