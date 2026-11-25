@@ -151,6 +151,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 import json
 import os
+import uuid
 
 class SafetyManager:
     """Construction site safety management system"""
@@ -164,6 +165,21 @@ class SafetyManager:
 
         # Load checklists
         self.checklists = self._load_checklists()
+
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
 
     def _load_checklists(self) -> Dict[str, List[dict]]:
         """Load inspection checklists"""
@@ -222,8 +238,6 @@ class SafetyManager:
     ) -> Inspection:
         """Create new inspection"""
 
-        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
         # Get checklist for this type
         checklist = self.checklists.get(inspection_type.value, [])
         checklist_items = [
@@ -231,19 +245,19 @@ class SafetyManager:
             for item in checklist
         ]
 
-        inspection = Inspection(
-            inspection_id=inspection_id,
-            inspection_type=inspection_type,
-            project_id=self.project_id,
-            date=date.today(),
-            inspector=inspector,
-            location=location,
-            checklist_items=checklist_items,
-            weather=weather
+        return self._insert_new(
+            self.inspections, "INS",
+            lambda inspection_id: Inspection(
+                inspection_id=inspection_id,
+                inspection_type=inspection_type,
+                project_id=self.project_id,
+                date=date.today(),
+                inspector=inspector,
+                location=location,
+                checklist_items=checklist_items,
+                weather=weather
+            )
         )
-
-        self.inspections[inspection_id] = inspection
-        return inspection
 
     def complete_checklist_item(
         self,
@@ -284,8 +298,6 @@ class SafetyManager:
     ) -> Hazard:
         """Record a hazard finding"""
 
-        hazard_id = f"HAZ-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
         if due_date is None:
             # Default due dates by severity
             days = {
@@ -297,18 +309,19 @@ class SafetyManager:
             }
             due_date = date.today() + timedelta(days=days.get(severity, 7))
 
-        hazard = Hazard(
-            hazard_id=hazard_id,
-            inspection_id=inspection_id,
-            description=description,
-            severity=severity,
-            location=location,
-            assigned_to=assigned_to,
-            due_date=due_date,
-            photo_urls=photo_urls or []
+        hazard = self._insert_new(
+            self.hazards, "HAZ",
+            lambda hazard_id: Hazard(
+                hazard_id=hazard_id,
+                inspection_id=inspection_id,
+                description=description,
+                severity=severity,
+                location=location,
+                assigned_to=assigned_to,
+                due_date=due_date,
+                photo_urls=photo_urls or []
+            )
         )
-
-        self.hazards[hazard_id] = hazard
 
         # Add to inspection
         if inspection_id in self.inspections:
@@ -376,23 +389,22 @@ class SafetyManager:
     ) -> Incident:
         """Report safety incident"""
 
-        incident_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-        incident = Incident(
-            incident_id=incident_id,
-            project_id=self.project_id,
-            date=datetime.now(),
-            type=incident_type,
-            description=description,
-            location=location,
-            injured_party=injured_party,
-            witness_names=witness_names or [],
-            immediate_actions=immediate_actions,
-            reported_by=reported_by,
-            photos=photo_urls or []
+        incident = self._insert_new(
+            self.incidents, "INC",
+            lambda incident_id: Incident(
+                incident_id=incident_id,
+                project_id=self.project_id,
+                date=datetime.now(),
+                type=incident_type,
+                description=description,
+                location=location,
+                injured_party=injured_party,
+                witness_names=witness_names or [],
+                immediate_actions=immediate_actions,
+                reported_by=reported_by,
+                photos=photo_urls or []
+            )
         )
-
-        self.incidents[incident_id] = incident
 
         # Immediate notification for all incidents
         self._notify_incident(incident)
