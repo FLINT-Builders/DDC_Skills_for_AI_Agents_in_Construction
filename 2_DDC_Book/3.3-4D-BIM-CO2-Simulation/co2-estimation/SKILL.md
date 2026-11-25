@@ -417,6 +417,22 @@ def classify_carbon_intensity(co2_per_m2):
     else:
         return {'rating': 'E', 'description': 'High carbon'}
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def store_cells_as_text(workbook):
+    """Keep every exported string literal so spreadsheet apps never evaluate it.
+
+    openpyxl turns any string starting with '=' into a formula, and material
+    and category names come from model files we do not control.
+    """
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+                if cell.data_type == 's' and str(cell.value).startswith(FORMULA_TRIGGERS):
+                    cell.quotePrefix = True
+
 def export_carbon_report(report, filepath):
     """Export carbon report to Excel"""
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
@@ -439,6 +455,8 @@ def export_carbon_report(report, filepath):
         # By material
         mat_df = pd.DataFrame.from_dict(report['by_material'], orient='index', columns=['CO2_kg'])
         mat_df.to_excel(writer, sheet_name='By Material')
+
+        store_cells_as_text(writer.book)
 ```
 
 ## Carbon Reduction Strategies
