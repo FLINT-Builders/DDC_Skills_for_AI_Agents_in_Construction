@@ -499,6 +499,32 @@ class DataQualityPipeline:
 ### Export Quality Report
 
 ```python
+# Column names and values come from the checked dataset. Cells starting with
+# these characters are evaluated as formulas by openpyxl and spreadsheet apps.
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def _excel_text(value):
+    """Prefix an apostrophe so a string is stored and shown as text, never a formula"""
+    if isinstance(value, str) and (
+        value[:1] in _FORMULA_PREFIXES or value.lstrip()[:1] in _FORMULA_PREFIXES
+    ):
+        return "'" + value
+    return value
+
+
+def _excel_safe_frame(frame):
+    """Escape every string cell, index label, and header before writing to Excel"""
+    safe = frame.copy()
+    safe.index = safe.index.map(_excel_text)
+    safe.columns = safe.columns.map(_excel_text)
+    for position in range(safe.shape[1]):
+        column = safe.iloc[:, position]
+        if column.dtype == object or isinstance(column.dtype, pd.StringDtype):
+            safe.isetitem(position, column.map(_excel_text))
+    return safe
+
+
 def export_quality_report(df, output_path, include_details=True):
     """Export comprehensive quality report to Excel"""
     checker = DataQualityChecker(df)
@@ -516,7 +542,7 @@ def export_quality_report(df, output_path, include_details=True):
                 len(results['issues'])
             ]
         })
-        summary.to_excel(writer, sheet_name='Summary', index=False)
+        _excel_safe_frame(summary).to_excel(writer, sheet_name='Summary', index=False)
 
         # Completeness details
         if 'completeness' in results:
@@ -525,12 +551,12 @@ def export_quality_report(df, output_path, include_details=True):
                 orient='index',
                 columns=['Completeness_%']
             )
-            comp_df.to_excel(writer, sheet_name='Completeness')
+            _excel_safe_frame(comp_df).to_excel(writer, sheet_name='Completeness')
 
         # Issues list
         if results['issues']:
             issues_df = pd.DataFrame({'Issue': results['issues']})
-            issues_df.to_excel(writer, sheet_name='Issues', index=False)
+            _excel_safe_frame(issues_df).to_excel(writer, sheet_name='Issues', index=False)
 
         # Missing values analysis
         if include_details:
@@ -540,7 +566,7 @@ def export_quality_report(df, output_path, include_details=True):
                 'Missing_Count': missing.values,
                 'Missing_%': (missing.values / len(df) * 100).round(2)
             })
-            missing_df.to_excel(writer, sheet_name='Missing_Values', index=False)
+            _excel_safe_frame(missing_df).to_excel(writer, sheet_name='Missing_Values', index=False)
 
     return output_path
 ```
