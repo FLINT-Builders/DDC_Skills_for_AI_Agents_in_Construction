@@ -92,6 +92,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
+import math
 import uuid
 import json
 
@@ -135,6 +136,10 @@ class StorageCondition:
 
 class MaterialTrackingSystem:
     """IoT-based material tracking system"""
+
+    # Largest share of the stored quantity a single weight reading may book
+    # as usage.
+    MAX_SINGLE_READING_DROP_FRACTION = 0.5
 
     def __init__(self):
         self.materials: Dict[str, MaterialItem] = {}
@@ -345,36 +350,59 @@ class MaterialTrackingSystem:
         if not material:
             return
 
-        previous_weight = metadata.get('previous_weight', material.quantity)
+        # The stored quantity is the only baseline; a previous weight carried
+        # in the message is never trusted.
+        stored_quantity = material.quantity
         current_weight = reading.value
 
-        if current_weight < previous_weight:
-            # Material was used
-            used_quantity = previous_weight - current_weight
+        if not self._is_plausible_weight_change(stored_quantity, current_weight):
+            return
 
-            movement = MaterialMovement(
-                movement_id=f"MOV-{uuid.uuid4().hex[:8]}",
-                material_id=material_id,
-                from_location=reading.location,
-                to_location="installed",
-                quantity=used_quantity,
-                timestamp=reading.timestamp,
-                recorded_by=reading.sensor_id,
-                movement_type='usage'
+        used_quantity = stored_quantity - current_weight
+        if used_quantity <= 0:
+            return
+
+        movement = MaterialMovement(
+            movement_id=f"MOV-{uuid.uuid4().hex[:8]}",
+            material_id=material_id,
+            from_location=reading.location,
+            to_location="installed",
+            quantity=used_quantity,
+            timestamp=reading.timestamp,
+            recorded_by=reading.sensor_id,
+            movement_type='usage'
+        )
+        self.movements.append(movement)
+
+        material.quantity = current_weight
+        material.last_updated = reading.timestamp
+
+        # Check for low stock
+        reorder_level = metadata.get('reorder_level')
+        if self._is_number(reorder_level) and material.quantity < reorder_level:
+            self._create_alert(
+                'low_stock',
+                reading.location,
+                material_id,
+                f"Low stock: {material.name} at {material.quantity} {material.unit}"
             )
-            self.movements.append(movement)
 
-            material.quantity = current_weight
-            material.last_updated = reading.timestamp
+    @staticmethod
+    def _is_number(value) -> bool:
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value))
 
-            # Check for low stock
-            if material.quantity < metadata.get('reorder_level', 0):
-                self._create_alert(
-                    'low_stock',
-                    reading.location,
-                    material_id,
-                    f"Low stock: {material.name} at {material.quantity} {material.unit}"
-                )
+    def _is_plausible_weight_change(self, stored_quantity: float,
+                                    current_weight) -> bool:
+        """A weight reading may only lower on-hand, by at most a bounded
+        fraction of the stored quantity; anything else needs a manual
+        stock adjustment."""
+        if not self._is_number(stored_quantity) or not self._is_number(current_weight):
+            return False
+        if current_weight < 0 or current_weight > stored_quantity:
+            return False
+        max_drop = stored_quantity * self.MAX_SINGLE_READING_DROP_FRACTION
+        return stored_quantity - current_weight <= max_drop
 
     def _create_alert(self, alert_type: str, location: str,
                       material_id: str, message: str):
@@ -787,11 +815,10 @@ class IoTMessageHandler:
 
         self.tracking.process_sensor_reading(
             sensor_id=sensor_id,
-            value=data.get('value', 0),
+            value=data.get('value'),
             unit='kg',
             metadata={
                 'material_id': data.get('material_id'),
-                'previous_weight': data.get('previous'),
                 'reorder_level': data.get('reorder_level')
             }
         )
