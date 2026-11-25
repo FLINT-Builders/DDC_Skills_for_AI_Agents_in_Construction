@@ -308,10 +308,17 @@ class RFIManager:
         schedule_impact: bool = False,
         schedule_days: int = 0
     ) -> RFI:
-        """Provide response to RFI"""
+        """Provide response to RFI. Only an Open (submitted) RFI can be answered."""
         rfi = self.rfis.get(rfi_number)
         if not rfi:
             raise ValueError(f"RFI {rfi_number} not found")
+
+        # Validate and mutate the same object; never look the RFI up again here.
+        if rfi.status != RFIStatus.OPEN:
+            raise ValueError(
+                f"RFI {rfi_number} cannot be answered from status '{rfi.status.value}'; "
+                f"it must be '{RFIStatus.OPEN.value}'"
+            )
 
         rfi.response = response
         rfi.response_by = response_by
@@ -334,10 +341,16 @@ class RFIManager:
         return rfi
 
     def close_rfi(self, rfi_number: str, change_order_ref: str = None) -> RFI:
-        """Close RFI after implementation"""
+        """Close RFI after implementation. Only an Answered RFI can be closed."""
         rfi = self.rfis.get(rfi_number)
         if not rfi:
             raise ValueError(f"RFI {rfi_number} not found")
+
+        if rfi.status != RFIStatus.ANSWERED:
+            raise ValueError(
+                f"RFI {rfi_number} cannot be closed from status '{rfi.status.value}'; "
+                f"it must be '{RFIStatus.ANSWERED.value}'"
+            )
 
         rfi.status = RFIStatus.CLOSED
         rfi.date_closed = date.today()
