@@ -373,44 +373,142 @@ class LODValidator:
 
 ### Information Delivery Specification
 
+For production checks, [ifctester](https://docs.ifcopenshell.org/ifctester.html) from IfcOpenShell implements the full IDS standard. The validator below covers entity and property facets and raises `IDSParseError` on anything it cannot evaluate, so an unsupported IDS is never reported as compliant.
+
 ```python
+import math
 import xml.etree.ElementTree as ET
 
+IDS_NS = 'http://standards.buildingsmart.org/IDS'
+
+
+class IDSParseError(ValueError):
+    """IDS content that cannot be evaluated. Never treat it as a pass."""
+
+
 class IDSValidator:
-    """Validate against IDS (Information Delivery Specification)"""
+    """Validate against IDS (Information Delivery Specification)
+
+    Supports entity (name, predefinedType) and property (propertySet,
+    baseName, value, cardinality) facets with simpleValue values. Property
+    dataType is not checked.
+    """
 
     def __init__(self, ids_path: str):
         self.ids = self._parse_ids(ids_path)
 
+    @staticmethod
+    def _local(element):
+        """Local name of an IDS (or un-namespaced) element, else None"""
+        tag = element.tag
+        if tag.startswith('{'):
+            ns, _, name = tag[1:].partition('}')
+            return name if ns == IDS_NS else None
+        return tag
+
+    def _children(self, element, name):
+        return [child for child in element if self._local(child) == name]
+
+    def _child(self, element, name, spec_name):
+        found = self._children(element, name)
+        if len(found) > 1:
+            raise IDSParseError(f"Specification {spec_name!r}: more than one <{name}>")
+        return found[0] if found else None
+
     def _parse_ids(self, path):
         """Parse IDS XML file"""
-        tree = ET.parse(path)
-        root = tree.getroot()
+        root = ET.parse(path).getroot()
+        if self._local(root) != 'ids':
+            raise IDSParseError(
+                f"{path}: root element {root.tag!r} is not an IDS <ids> element ({IDS_NS})"
+            )
 
         specifications = []
-        for spec in root.findall('.//specification'):
-            specifications.append({
-                'name': spec.get('name'),
-                'applicability': self._parse_facets(spec.find('applicability')),
-                'requirements': self._parse_facets(spec.find('requirements'))
-            })
+        for container in self._children(root, 'specifications'):
+            for spec in self._children(container, 'specification'):
+                specifications.append(self._parse_specification(spec))
 
+        if not specifications:
+            raise IDSParseError(f"{path}: no IDS specifications found")
         return specifications
 
-    def _parse_facets(self, element):
-        """Parse IDS facets"""
-        if element is None:
-            return []
+    def _parse_specification(self, spec):
+        name = spec.get('name') or '(unnamed specification)'
 
+        applicability = self._child(spec, 'applicability', name)
+        if applicability is None:
+            raise IDSParseError(f"Specification {name!r} has no <applicability>")
+        applicability_facets = self._parse_facets(applicability, name, 'applicability')
+        if sum(f['type'] == 'entity' for f in applicability_facets) != 1:
+            raise IDSParseError(
+                f"Specification {name!r}: applicability needs exactly one entity facet"
+            )
+
+        requirements = self._child(spec, 'requirements', name)
+        return {
+            'name': name,
+            'applicability': applicability_facets,
+            'requirements': (self._parse_facets(requirements, name, 'requirements')
+                             if requirements is not None else []),
+            # xs:occurs defaults: minOccurs=1 means at least one applicable element
+            'min_occurs': int(applicability.get('minOccurs', '1')),
+            'prohibited': applicability.get('maxOccurs') == '0',
+        }
+
+    def _value(self, facet, child_name, spec_name, required):
+        """Read an idsValue child; only simpleValue is supported"""
+        holder = self._child(facet, child_name, spec_name)
+        if holder is None:
+            if required:
+                raise IDSParseError(
+                    f"Specification {spec_name!r}: facet has no <{child_name}>"
+                )
+            return None
+
+        values = self._children(holder, 'simpleValue')
+        if len(values) != 1 or len(holder) != 1:
+            raise IDSParseError(
+                f"Specification {spec_name!r}: <{child_name}> must hold one simpleValue "
+                "(xs:restriction is not supported, use ifctester)"
+            )
+        text = (values[0].text or '').strip()
+        if not text:
+            raise IDSParseError(f"Specification {spec_name!r}: <{child_name}> is empty")
+        return text
+
+    def _parse_facets(self, element, spec_name, clause):
+        """Parse IDS facets"""
         facets = []
         for child in element:
-            facet = {
-                'type': child.tag,
-                'constraints': {}
-            }
-            for attr, value in child.attrib.items():
-                facet['constraints'][attr] = value
-            facets.append(facet)
+            kind = self._local(child)
+
+            if kind == 'entity' and clause == 'applicability':
+                facets.append({
+                    'type': 'entity',
+                    'name': self._value(child, 'name', spec_name, required=True),
+                    'predefined_type': self._value(child, 'predefinedType', spec_name,
+                                                   required=False),
+                })
+            elif kind == 'property':
+                cardinality = (child.get('cardinality', 'required')
+                               if clause == 'requirements' else 'required')
+                if cardinality not in ('required', 'optional', 'prohibited'):
+                    raise IDSParseError(
+                        f"Specification {spec_name!r}: unknown cardinality {cardinality!r}"
+                    )
+                facets.append({
+                    'type': 'property',
+                    'property_set': self._value(child, 'propertySet', spec_name,
+                                                required=True),
+                    'base_name': self._value(child, 'baseName', spec_name, required=True),
+                    'value': self._value(child, 'value', spec_name, required=False),
+                    'cardinality': cardinality,
+                })
+            else:
+                raise IDSParseError(
+                    f"Specification {spec_name!r}: unsupported {clause} facet "
+                    f"{child.tag!r} (use ifctester)"
+                )
 
         return facets
 
@@ -422,6 +520,23 @@ class IDSValidator:
             applicable_elements = self._find_applicable_elements(
                 model, spec['applicability']
             )
+
+            if spec['prohibited']:
+                for element in applicable_elements:
+                    results.append({
+                        'specification': spec['name'],
+                        'element': element.GlobalId,
+                        'issues': ['Element is prohibited by this specification']
+                    })
+                continue
+
+            if len(applicable_elements) < spec['min_occurs']:
+                results.append({
+                    'specification': spec['name'],
+                    'element': None,
+                    'issues': [f"Expected at least {spec['min_occurs']} applicable "
+                               f"element(s), found {len(applicable_elements)}"]
+                })
 
             for element in applicable_elements:
                 issues = self._check_requirements(element, spec['requirements'])
@@ -436,13 +551,18 @@ class IDSValidator:
 
     def _find_applicable_elements(self, model, applicability):
         """Find elements matching applicability criteria"""
-        elements = []
+        entity = next(f for f in applicability if f['type'] == 'entity')
+        elements = model.by_type(entity['name'])
 
-        for facet in applicability:
-            if facet['type'] == 'entity':
-                ifc_type = facet['constraints'].get('name')
-                if ifc_type:
-                    elements.extend(model.by_type(ifc_type))
+        if entity['predefined_type']:
+            elements = [e for e in elements
+                        if element_util.get_predefined_type(e) == entity['predefined_type']]
+
+        property_filters = [f for f in applicability if f['type'] == 'property']
+        if property_filters:
+            elements = [e for e in elements
+                        if all(self._property_issue(element_util.get_psets(e), f) is None
+                               for f in property_filters)]
 
         return elements
 
@@ -452,16 +572,38 @@ class IDSValidator:
         psets = element_util.get_psets(element)
 
         for req in requirements:
-            if req['type'] == 'property':
-                pset_name = req['constraints'].get('propertySet')
-                prop_name = req['constraints'].get('name')
-
-                if pset_name and prop_name:
-                    pset = psets.get(pset_name, {})
-                    if prop_name not in pset:
-                        issues.append(f"Missing property: {pset_name}.{prop_name}")
+            issue = self._property_issue(psets, req)
+            if issue:
+                issues.append(issue)
 
         return issues
+
+    def _property_issue(self, psets, facet):
+        label = f"{facet['property_set']}.{facet['base_name']}"
+        props = psets.get(facet['property_set']) or {}
+        actual = props.get(facet['base_name'])
+        present = actual is not None
+        matches = present and (facet['value'] is None
+                               or self._value_matches(actual, facet['value']))
+
+        if facet['cardinality'] == 'prohibited':
+            return f"Prohibited property present: {label}" if matches else None
+        if not present:
+            return None if facet['cardinality'] == 'optional' else f"Missing property: {label}"
+        if not matches:
+            return f"Property {label} is {actual!r}, expected {facet['value']!r}"
+        return None
+
+    @staticmethod
+    def _value_matches(actual, expected):
+        if isinstance(actual, bool):
+            return expected.upper() == ('TRUE' if actual else 'FALSE')
+        if isinstance(actual, (int, float)):
+            try:
+                return math.isclose(float(actual), float(expected), rel_tol=1e-6)
+            except ValueError:
+                return False
+        return str(actual) == expected
 ```
 
 ## Pipeline Automation
