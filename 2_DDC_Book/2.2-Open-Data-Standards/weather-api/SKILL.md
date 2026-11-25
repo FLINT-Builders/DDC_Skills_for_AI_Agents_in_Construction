@@ -196,32 +196,43 @@ class ConstructionWeatherRisk:
         if activities is None:
             activities = list(self.THRESHOLDS.keys())
 
+        # The risk band is a share of the activities actually checked, so
+        # names without thresholds and repeated names must not enter the
+        # denominator, or they would dilute a stopped day into a milder band.
+        unique = list(dict.fromkeys(activities))
+        checked = [a for a in unique if a in self.THRESHOLDS]
+        unknown = [a for a in unique if a not in self.THRESHOLDS]
+
         affected = []
         recommendations = []
 
-        for activity in activities:
-            if activity in self.THRESHOLDS:
-                thresh = self.THRESHOLDS[activity]
+        for activity in checked:
+            thresh = self.THRESHOLDS[activity]
 
-                reasons = []
-                if condition.temperature < thresh['min_temp']:
-                    reasons.append(f"Too cold ({condition.temperature}°C)")
-                if condition.temperature > thresh['max_temp']:
-                    reasons.append(f"Too hot ({condition.temperature}°C)")
-                if condition.wind_speed > thresh['max_wind']:
-                    reasons.append(f"High wind ({condition.wind_speed} m/s)")
-                if condition.precipitation > thresh['max_precip']:
-                    reasons.append(f"Precipitation ({condition.precipitation} mm)")
+            reasons = []
+            if condition.temperature < thresh['min_temp']:
+                reasons.append(f"Too cold ({condition.temperature}°C)")
+            if condition.temperature > thresh['max_temp']:
+                reasons.append(f"Too hot ({condition.temperature}°C)")
+            if condition.wind_speed > thresh['max_wind']:
+                reasons.append(f"High wind ({condition.wind_speed} m/s)")
+            if condition.precipitation > thresh['max_precip']:
+                reasons.append(f"Precipitation ({condition.precipitation} mm)")
 
-                if reasons:
-                    affected.append(activity)
-                    recommendations.append(f"{activity}: " + ", ".join(reasons))
+            if reasons:
+                affected.append(activity)
+                recommendations.append(f"{activity}: " + ", ".join(reasons))
+
+        if unknown:
+            recommendations.append(
+                "No weather thresholds for (not scored): " + ", ".join(map(str, unknown))
+            )
 
         # Determine overall risk level
-        if len(affected) >= len(activities) * 0.8:
+        if len(affected) >= len(checked) * 0.8:
             risk = WeatherRisk.CRITICAL
             workable = 0
-        elif len(affected) >= len(activities) * 0.5:
+        elif len(affected) >= len(checked) * 0.5:
             risk = WeatherRisk.HIGH
             workable = 4
         elif len(affected) > 0:
