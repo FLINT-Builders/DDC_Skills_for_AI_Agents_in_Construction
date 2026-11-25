@@ -395,6 +395,19 @@ class ConstructionInfoExtractor:
 ## Processing Pipeline
 
 ```python
+# Excel, LibreOffice and CSV importers treat text starting with these as a formula.
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+def sanitize_spreadsheet_value(value):
+    """Keep document-supplied text from being evaluated when the workbook is opened"""
+    if isinstance(value, str):
+        if value.startswith(FORMULA_TRIGGERS) or value.lstrip().startswith(FORMULA_TRIGGERS):
+            return "'" + value
+        return value
+    if isinstance(value, (list, tuple)):
+        return type(value)(sanitize_spreadsheet_value(v) for v in value)
+    return value
+
 def process_document_batch(documents: List[str], output_path: str):
     """Process and classify a batch of documents"""
     classifier = ConstructionDocumentClassifier()
@@ -414,13 +427,14 @@ def process_document_batch(documents: List[str], output_path: str):
         else:
             extracted = extractor.extract_all(doc)
 
-        results.append({
+        row = {
             'Document_ID': i + 1,
             'Classification': classification.predicted_class,
             'Confidence': classification.confidence,
             'Keywords': ', '.join(classification.keywords),
             **extracted
-        })
+        }
+        results.append({k: sanitize_spreadsheet_value(v) for k, v in row.items()})
 
     df = pd.DataFrame(results)
     df.to_excel(output_path, index=False)
