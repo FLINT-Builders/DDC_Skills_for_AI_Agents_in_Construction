@@ -21,11 +21,41 @@ Systematic tracking of as-built documentation submissions, revisions, and approv
 ## Technical Implementation
 
 ```python
+import numbers
 import pandas as pd
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from enum import Enum
+
+
+# Leading characters that make a spreadsheet treat a cell as a formula
+# (including the full-width forms some locales accept).
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "\uff1d", "\uff0b", "\uff0d", "\uff20")
+
+
+def _excel_safe(value: Any) -> Any:
+    """Return a cell value that a spreadsheet will never evaluate as a formula.
+
+    Strings from contractors (titles, numbers, company names, ...) are written
+    as literal text; any other non-numeric, non-date object is converted to
+    text first because the Excel writer would otherwise call str() on it.
+    """
+    if value is None or isinstance(value, (bool, numbers.Number, date, timedelta)):
+        return value
+    text = str(value)
+    if text.startswith(_FORMULA_PREFIXES) or text.lstrip().startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
+def _excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize every cell and header of a DataFrame before writing it to Excel."""
+    # DataFrame.map is pandas >= 2.1; applymap is the older name.
+    cell_map = getattr(df, "map", None) or df.applymap
+    safe = cell_map(_excel_safe)
+    safe.columns = [_excel_safe(c) for c in safe.columns]
+    return safe
 
 
 class DocumentStatus(Enum):
@@ -336,7 +366,7 @@ class AsBuiltTracker:
                 'Overdue': summary['overdue'],
                 'Days to Handover': summary['days_to_handover']
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            _excel_safe_frame(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # All Documents
             docs_df = pd.DataFrame([
@@ -355,20 +385,20 @@ class AsBuiltTracker:
                 }
                 for d in self.documents.values()
             ])
-            docs_df.to_excel(writer, sheet_name='Documents', index=False)
+            _excel_safe_frame(docs_df).to_excel(writer, sheet_name='Documents', index=False)
 
             # Overdue
             overdue = self.get_overdue_documents()
             if overdue:
                 overdue_df = pd.DataFrame(overdue)
-                overdue_df.to_excel(writer, sheet_name='Overdue', index=False)
+                _excel_safe_frame(overdue_df).to_excel(writer, sheet_name='Overdue', index=False)
 
             # By Contractor
             contractors = set(d.contractor for d in self.documents.values())
             contractor_data = [self.get_contractor_status(c) for c in contractors]
             if contractor_data:
                 contractor_df = pd.DataFrame(contractor_data)
-                contractor_df.to_excel(writer, sheet_name='By Contractor', index=False)
+                _excel_safe_frame(contractor_df).to_excel(writer, sheet_name='By Contractor', index=False)
 
         return output_path
 ```
