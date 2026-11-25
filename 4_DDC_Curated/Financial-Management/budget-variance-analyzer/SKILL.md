@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
+import math
 import statistics
 
 class CostCategory(Enum):
@@ -61,15 +62,20 @@ class CostCode:
     description: str
     category: CostCategory
     original_budget: float
-    revised_budget: float = 0.0
+    revised_budget: Optional[float] = None
     committed: float = 0.0
     actual: float = 0.0
     forecast: float = 0.0
     percent_complete: float = 0.0
 
+    def __post_init__(self):
+        if self.revised_budget is None:
+            self.revised_budget = self.original_budget
+
     @property
     def budget(self) -> float:
-        return self.revised_budget if self.revised_budget else self.original_budget
+        # A revised budget of 0 (e.g. a fully drawn contingency) is a real value.
+        return self.revised_budget
 
     @property
     def variance(self) -> float:
@@ -117,6 +123,7 @@ class VarianceReport:
     variances_by_category: Dict[str, Dict]
     critical_items: List[CostCode]
     trend: str
+    budget_exceeds_original: bool = False
 
 class BudgetVarianceAnalyzer:
     """Analyze construction budget variances."""
@@ -129,12 +136,16 @@ class BudgetVarianceAnalyzer:
         "critical": -0.10      # 10% over
     }
 
+    # Half a cent, so float rounding from transfers does not trip the warning.
+    BUDGET_TOLERANCE = 0.005
+
     def __init__(self, project_name: str, original_budget: float):
         self.project_name = project_name
         self.original_budget = original_budget
         self.cost_codes: Dict[str, CostCode] = {}
         self.snapshots: List[CostSnapshot] = []
         self.contingency_used = 0.0
+        self.contingency_draws: List[Dict] = []
 
     def add_cost_code(self, code: str, description: str,
                      category: CostCategory, budget: float) -> CostCode:
@@ -218,14 +229,72 @@ class BudgetVarianceAnalyzer:
 
         return cost_code
 
-    def use_contingency(self, amount: float, target_code: str,
-                       reason: str = "") -> float:
-        """Use contingency to cover variance."""
-        self.contingency_used += amount
+    def contingency_codes(self) -> List[CostCode]:
+        """Cost codes that make up the contingency pool."""
+        return [cc for cc in self.cost_codes.values()
+                if cc.category == CostCategory.CONTINGENCY]
 
-        if target_code in self.cost_codes:
-            cc = self.cost_codes[target_code]
-            cc.revised_budget += amount
+    def contingency_remaining(self) -> float:
+        """Live contingency balance (sum of contingency code budgets)."""
+        return sum(cc.budget for cc in self.contingency_codes())
+
+    def use_contingency(self, amount: float, target_code: str,
+                       reason: str = "", approver: str = "") -> float:
+        """Transfer budget from the contingency pool to a cost code.
+
+        The pool's budget drops by the same amount the target's rises, so the
+        project's total budget does not change. Raises ValueError and changes
+        nothing if the draw is invalid or larger than the remaining pool.
+        """
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool) \
+                or not math.isfinite(amount) or amount <= 0:
+            raise ValueError("Contingency draw amount must be a positive number")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("Contingency draw requires a reason")
+        if not isinstance(approver, str) or not approver.strip():
+            raise ValueError("Contingency draw requires an approver")
+
+        target = self.cost_codes.get(target_code)
+        if target is None:
+            raise ValueError(f"Cost code {target_code} not found")
+        if target.category == CostCategory.CONTINGENCY:
+            raise ValueError("Cannot draw contingency onto a contingency cost code")
+
+        pool = self.contingency_codes()
+        if not pool:
+            raise ValueError("No contingency cost code exists to draw from")
+
+        remaining = sum(cc.budget for cc in pool)
+        if amount > remaining:
+            raise ValueError(
+                f"Contingency draw of {amount:,.2f} exceeds remaining "
+                f"contingency of {remaining:,.2f}"
+            )
+
+        # Plan the whole transfer before mutating anything.
+        sources = []
+        left = amount
+        for cc in pool:
+            if left <= 0:
+                break
+            take = min(max(cc.budget, 0.0), left)
+            if take > 0:
+                sources.append((cc, take))
+                left -= take
+
+        for cc, take in sources:
+            cc.revised_budget = cc.budget - take
+            cc.forecast = max(cc.forecast - take, 0.0)
+        target.revised_budget = target.budget + amount
+        self.contingency_used += amount
+        self.contingency_draws.append({
+            "date": datetime.now(),
+            "amount": amount,
+            "target_code": target.code,
+            "sources": [(cc.code, take) for cc, take in sources],
+            "reason": reason.strip(),
+            "approver": approver.strip(),
+        })
 
         return self.contingency_used
 
@@ -405,7 +474,10 @@ class BudgetVarianceAnalyzer:
             vac=vac,
             variances_by_category=self.analyze_by_category(),
             critical_items=self.identify_critical_items(),
-            trend=trend_analysis["trend"]
+            trend=trend_analysis["trend"],
+            budget_exceeds_original=(
+                total_budget > self.original_budget + self.BUDGET_TOLERANCE
+            )
         )
 
     def generate_report_markdown(self, report: VarianceReport) -> str:
@@ -418,8 +490,19 @@ class BudgetVarianceAnalyzer:
             "",
             "## Executive Summary",
             "",
+        ]
+
+        if report.budget_exceeds_original:
+            lines.extend([
+                f"> **WARNING: cost-code budgets exceed original budget** "
+                f"(${report.total_budget:,.0f} vs ${self.original_budget:,.0f})",
+                "",
+            ])
+
+        lines += [
             f"| Metric | Amount |",
             f"|--------|--------|",
+            f"| Original Budget | ${self.original_budget:,.0f} |",
             f"| Total Budget | ${report.total_budget:,.0f} |",
             f"| Actual to Date | ${report.total_actual:,.0f} |",
             f"| Committed | ${report.total_committed:,.0f} |",
@@ -477,6 +560,7 @@ analyzer.add_cost_code("03-100", "Concrete", CostCategory.MATERIALS, 400000)
 analyzer.add_cost_code("05-100", "Structural Steel", CostCategory.SUBCONTRACTOR, 800000)
 analyzer.add_cost_code("15-100", "Mechanical", CostCategory.SUBCONTRACTOR, 600000)
 analyzer.add_cost_code("16-100", "Electrical", CostCategory.SUBCONTRACTOR, 450000)
+analyzer.add_cost_code("19-800", "Contingency", CostCategory.CONTINGENCY, 250000)
 
 # Update actuals
 analyzer.update_actual("01-100", 120000)
@@ -490,6 +574,12 @@ analyzer.update_committed("05-100", 900000)
 
 # Update forecast
 analyzer.update_forecast("05-100", 920000, percent_complete=85)
+
+# Transfer contingency to the overrun (capped at the remaining pool;
+# the contingency code's budget drops by the same amount)
+analyzer.use_contingency(50000, "05-100",
+                         reason="Steel price escalation", approver="Project Executive")
+print(f"Contingency remaining: {analyzer.contingency_remaining():,.0f}")
 
 # Analyze
 cpi = analyzer.calculate_cpi()
