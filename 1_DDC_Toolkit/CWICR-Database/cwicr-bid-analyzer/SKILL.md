@@ -36,6 +36,24 @@ from enum import Enum
 from collections import defaultdict
 
 
+# Leading characters that spreadsheet apps treat as the start of a formula,
+# including the full-width forms some apps normalize.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n',
+                    '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe(value: Any) -> Any:
+    """Store bidder-supplied text as literal text, never as a formula."""
+    if isinstance(value, str) and value.lstrip(' ').startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build an export DataFrame with every text cell neutralized."""
+    return pd.DataFrame([{k: excel_safe(v) for k, v in row.items()} for row in rows])
+
+
 class BidStatus(Enum):
     """Bid evaluation status."""
     COMPLIANT = "compliant"
@@ -300,7 +318,7 @@ class CWICRBidAnalyzer:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
-            summary_df = pd.DataFrame([{
+            summary_df = excel_frame([{
                 'Bidder': analysis.bidder_name,
                 'Bid Total': analysis.bid_total,
                 'Benchmark Total': analysis.benchmark_total,
@@ -311,7 +329,7 @@ class CWICRBidAnalyzer:
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
             # Line Items
-            items_df = pd.DataFrame([
+            items_df = excel_frame([
                 {
                     'Item Code': i.item_code,
                     'Description': i.description,
@@ -329,7 +347,7 @@ class CWICRBidAnalyzer:
             items_df.to_excel(writer, sheet_name='Line Items', index=False)
 
             # Flagged Items
-            flagged_df = pd.DataFrame([
+            flagged_df = excel_frame([
                 {
                     'Item Code': i.item_code,
                     'Description': i.description,
@@ -351,7 +369,7 @@ class CWICRBidAnalyzer:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Overview
-            overview_df = pd.DataFrame([
+            overview_df = excel_frame([
                 {
                     'Bidder': b.bidder_name,
                     'Bid Total': b.bid_total,
@@ -364,7 +382,7 @@ class CWICRBidAnalyzer:
             overview_df.to_excel(writer, sheet_name='Overview', index=False)
 
             # Ranking
-            ranking_df = pd.DataFrame([
+            ranking_df = excel_frame([
                 {'Rank': i+1, 'Bidder': name, 'Total': total}
                 for i, (name, total) in enumerate(comparison.ranking)
             ])

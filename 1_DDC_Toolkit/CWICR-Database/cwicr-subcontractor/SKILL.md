@@ -35,6 +35,24 @@ from enum import Enum
 from statistics import mean, stdev
 
 
+# Leading characters that spreadsheet apps treat as the start of a formula,
+# including the full-width forms some apps normalize.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n',
+                    '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe(value: Any) -> Any:
+    """Store bidder-supplied text as literal text, never as a formula."""
+    if isinstance(value, str) and value.lstrip(' ').startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build an export DataFrame with every text cell neutralized."""
+    return pd.DataFrame([{k: excel_safe(v) for k, v in row.items()} for row in rows])
+
+
 class BidStatus(Enum):
     """Bid evaluation status."""
     COMPETITIVE = "competitive"
@@ -277,7 +295,7 @@ class CWICRSubcontractor:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
-            summary_df = pd.DataFrame([{
+            summary_df = excel_frame([{
                 'Number of Bids': comparison['bid_count'],
                 'Average Bid': comparison['average_bid'],
                 'Spread': comparison['spread'],
@@ -289,7 +307,7 @@ class CWICRSubcontractor:
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
             # All evaluations
-            eval_df = pd.DataFrame([
+            eval_df = excel_frame([
                 {
                     'Subcontractor': e.subcontractor_name,
                     'Bid Amount': e.bid_amount,
