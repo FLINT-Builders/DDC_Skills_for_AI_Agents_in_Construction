@@ -21,6 +21,7 @@ Rule-based validation engine using RegEx and logic rules to ensure data quality 
 ## Technical Implementation
 
 ```python
+import math
 import re
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
@@ -250,7 +251,9 @@ class ValidationRulesBuilder:
         """Apply single validation rule."""
 
         if rule.rule_type == RuleType.REQUIRED:
-            is_valid = value is not None and value != "" and value != []
+            # pandas reads blank spreadsheet cells as NaN
+            is_nan = isinstance(value, float) and math.isnan(value)
+            is_valid = value is not None and value != "" and value != [] and not is_nan
             return ValidationResult(
                 field=rule.field,
                 is_valid=is_valid,
@@ -275,12 +278,13 @@ class ValidationRulesBuilder:
         elif rule.rule_type == RuleType.RANGE:
             try:
                 num_value = float(value)
-                is_valid = True
+                # NaN and +/-inf compare False against every bound
+                is_valid = math.isfinite(num_value)
                 if rule.min_value is not None and num_value < rule.min_value:
                     is_valid = False
                 if rule.max_value is not None and num_value > rule.max_value:
                     is_valid = False
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 is_valid = False
 
         elif rule.rule_type == RuleType.ENUM:

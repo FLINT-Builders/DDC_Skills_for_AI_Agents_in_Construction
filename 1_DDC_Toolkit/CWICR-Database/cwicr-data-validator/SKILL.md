@@ -27,6 +27,7 @@ Systematic validation of CWICR data and estimate inputs to catch errors, outlier
 ## Technical Implementation
 
 ```python
+import math
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
@@ -178,6 +179,19 @@ class CWICRDataValidator:
                 if pd.notna(value):
                     try:
                         num_val = float(value)
+                        # NaN and +/-inf compare False against every bound
+                        if not math.isfinite(num_val):
+                            issues.append(ValidationIssue(
+                                field=field,
+                                record_id=record_id,
+                                category=ValidationCategory.INVALID_VALUE,
+                                severity=ValidationSeverity.ERROR,
+                                message=f"Non-finite value in '{field}'",
+                                current_value=value,
+                                expected="Finite number"
+                            ))
+                            continue
+
                         # Check for negative where positive expected
                         if field in self.POSITIVE_FIELDS and num_val < 0:
                             issues.append(ValidationIssue(
@@ -267,7 +281,11 @@ class CWICRDataValidator:
 
             # Check quantity
             qty = item.get('quantity', 0)
-            if qty <= 0:
+            try:
+                qty_valid = math.isfinite(qty) and qty > 0
+            except (TypeError, OverflowError):
+                qty_valid = False
+            if not qty_valid:
                 item_issues.append(ValidationIssue(
                     field='quantity',
                     record_id=record_id,
