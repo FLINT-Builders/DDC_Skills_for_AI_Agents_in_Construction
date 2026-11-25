@@ -36,6 +36,17 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, timedelta
 import json
+import uuid
+
+def new_record_id(prefix: str) -> str:
+    """Unique record id; the timestamp alone repeats within the same second."""
+    return f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:12]}"
+
+def store_new(records: Dict, record_id: str, record) -> None:
+    """Insert a record, refusing to replace one that already uses the id."""
+    if record_id in records:
+        raise ValueError(f"Record id {record_id} already exists")
+    records[record_id] = record
 
 class QCStatus(Enum):
     PENDING = "pending"
@@ -130,10 +141,15 @@ class QualityControlManager:
 
     def create_itp(self, work_package: str, inspection_points: List[Dict]) -> List[InspectionPoint]:
         """Create Inspection and Test Plan (ITP)."""
+        ids = [f"{work_package}-{idx+1:03d}" for idx in range(len(inspection_points))]
+        existing = [ip_id for ip_id in ids if ip_id in self.inspection_points]
+        if existing:
+            raise ValueError(f"Inspection points already exist: {', '.join(existing)}")
+
         created = []
-        for idx, point in enumerate(inspection_points):
+        for ip_id, point in zip(ids, inspection_points):
             ip = InspectionPoint(
-                id=f"{work_package}-{idx+1:03d}",
+                id=ip_id,
                 name=point['name'],
                 spec_reference=point.get('spec_ref', ''),
                 acceptance_criteria=point.get('criteria', ''),
@@ -141,7 +157,7 @@ class QualityControlManager:
                 hold_point=point.get('hold_point', False),
                 witness_point=point.get('witness_point', False)
             )
-            self.inspection_points[ip.id] = ip
+            store_new(self.inspection_points, ip.id, ip)
             created.append(ip)
         return created
 
@@ -151,7 +167,7 @@ class QualityControlManager:
         if inspection_point_id not in self.inspection_points:
             raise ValueError(f"Inspection point {inspection_point_id} not found")
 
-        inspection_id = f"QCI-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        inspection_id = new_record_id("QCI")
         inspection = QCInspection(
             id=inspection_id,
             inspection_point=self.inspection_points[inspection_point_id],
@@ -159,7 +175,7 @@ class QualityControlManager:
             scheduled_date=scheduled_date,
             inspector=inspector
         )
-        self.inspections[inspection_id] = inspection
+        store_new(self.inspections, inspection_id, inspection)
         return inspection
 
     def conduct_inspection(self, inspection_id: str, result: str,
@@ -185,7 +201,7 @@ class QualityControlManager:
                      spec_reference: str, photos: List[str] = None,
                      assigned_to: str = "") -> Defect:
         """Record a defect from inspection."""
-        defect_id = f"DEF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        defect_id = new_record_id("DEF")
 
         # Set due date based on severity
         due_days = {
@@ -207,13 +223,13 @@ class QualityControlManager:
             due_date=datetime.now() + timedelta(days=due_days[severity])
         )
 
-        self.defects[defect_id] = defect
+        store_new(self.defects, defect_id, defect)
         return defect
 
     def create_ncr(self, defect_ids: List[str], title: str,
                   contractor: str, description: str = "") -> NonConformanceReport:
         """Create Non-Conformance Report from defects."""
-        ncr_id = f"NCR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        ncr_id = new_record_id("NCR")
 
         # Collect spec references from defects
         spec_sections = []
@@ -231,7 +247,7 @@ class QualityControlManager:
             response_due=datetime.now() + timedelta(days=5)
         )
 
-        self.ncrs[ncr_id] = ncr
+        store_new(self.ncrs, ncr_id, ncr)
         return ncr
 
     def _generate_ncr_description(self, defect_ids: List[str]) -> str:
