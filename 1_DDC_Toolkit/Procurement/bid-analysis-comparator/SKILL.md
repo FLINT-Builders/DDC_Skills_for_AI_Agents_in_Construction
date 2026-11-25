@@ -20,6 +20,24 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+# Leading characters that spreadsheet apps treat as the start of a formula,
+# including the full-width forms some apps normalize.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n',
+                    '\uff1d', '\uff0b', '\uff0d', '\uff20')
+
+
+def excel_safe(value: Any) -> Any:
+    """Store bidder-supplied text as literal text, never as a formula."""
+    if isinstance(value, str) and value.lstrip(' ').startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df with every text cell and header neutralized for export."""
+    return df.apply(lambda col: col.map(excel_safe)).rename(columns=excel_safe)
+
+
 class BidStatus(Enum):
     RECEIVED = "received"
     UNDER_REVIEW = "under_review"
@@ -154,7 +172,7 @@ class BidAnalysisComparator:
         }
 
     def export_analysis(self, output_path: str):
-        df = self.calculate_weighted_scores()
+        df = excel_safe_frame(self.calculate_weighted_scores())
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Comparison', index=False)
 
@@ -165,7 +183,7 @@ class BidAnalysisComparator:
                 'Exclusions': '; '.join(b.exclusions),
                 'Qualifications': '; '.join(b.qualifications)
             } for b in self.bids.values()]
-            pd.DataFrame(details).to_excel(writer, sheet_name='Details', index=False)
+            excel_safe_frame(pd.DataFrame(details)).to_excel(writer, sheet_name='Details', index=False)
 ```
 
 ## Quick Start
