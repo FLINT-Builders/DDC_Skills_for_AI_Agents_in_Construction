@@ -18,7 +18,7 @@ Based on DDC methodology (Chapter 2.2), this skill integrates open construction 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Optional, Any, Callable
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import json
 import requests
 from abc import ABC, abstractmethod
@@ -101,6 +101,8 @@ class OpenDataConnector(ABC):
 class WeatherDataConnector(OpenDataConnector):
     """Connector for weather data (e.g., OpenWeatherMap)"""
 
+    MAX_HISTORY_DAYS = 30
+
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
         self.base_url = "https://api.openweathermap.org/data/2.5"
@@ -119,8 +121,9 @@ class WeatherDataConnector(OpenDataConnector):
         records = []
 
         # Generate sample historical data
-        current = start_date
-        while current <= end_date:
+        num_days = max(0, min((end_date - start_date).days + 1, self.MAX_HISTORY_DAYS))
+        for offset in range(num_days):
+            current = start_date + timedelta(days=offset)
             records.append(DataRecord(
                 source_id="openweathermap",
                 timestamp=datetime.combine(current, datetime.min.time()),
@@ -134,9 +137,8 @@ class WeatherDataConnector(OpenDataConnector):
                 },
                 metadata={"lat": lat, "lon": lon}
             ))
-            current = date(current.year, current.month, current.day + 1) if current.day < 28 else date(current.year, current.month + 1 if current.month < 12 else 1, 1)
 
-        return records[:30]  # Limit for demo
+        return records
 
     def get_metadata(self) -> Dict:
         return {
