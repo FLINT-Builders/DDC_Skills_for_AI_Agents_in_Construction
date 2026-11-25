@@ -116,6 +116,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 import uuid
 
+# RFI text comes from outside parties. A cell starting with one of these is
+# run as a formula by Excel (or by a CSV import of the log).
+FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+def as_log_text(value):
+    """Keep RFI text a literal string in the log, never a formula."""
+    if isinstance(value, str) and value.lstrip(" ").startswith(FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
 class RFIStatus(Enum):
     DRAFT = "Draft"
     OPEN = "Open"
@@ -229,8 +239,8 @@ class RFIManager:
                 'change_order_ref': rfi.change_order_ref
             })
 
-        df = pd.DataFrame(records)
-        df.to_excel(self.storage_path, index=False)
+        df = pd.DataFrame(records).apply(lambda column: column.map(as_log_text))
+        df.to_excel(self.storage_path, index=False, engine="openpyxl")
 
     def _get_next_number(self) -> str:
         """Generate next RFI number"""
