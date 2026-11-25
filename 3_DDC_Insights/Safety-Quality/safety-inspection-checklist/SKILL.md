@@ -49,6 +49,7 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime
 import json
+import uuid
 
 class InspectionType(Enum):
     DAILY_SITE = "daily_site"
@@ -166,27 +167,40 @@ class SafetyInspectionManager:
         self.inspections: Dict[str, SafetyInspection] = {}
         self.findings_db: List[InspectionFinding] = []
 
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
+
     def create_inspection(self, inspection_type: InspectionType,
                          project_id: str, project_name: str,
                          location: str, inspector: str,
                          weather: str = "", workers: int = 0) -> SafetyInspection:
         """Create new inspection from template."""
-        inspection_id = f"INS-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-        inspection = SafetyInspection(
-            id=inspection_id,
-            inspection_type=inspection_type,
-            project_id=project_id,
-            project_name=project_name,
-            location=location,
-            inspector=inspector,
-            date=datetime.now(),
-            weather=weather,
-            workers_on_site=workers
+        return self._insert_new(
+            self.inspections, "INS",
+            lambda inspection_id: SafetyInspection(
+                id=inspection_id,
+                inspection_type=inspection_type,
+                project_id=project_id,
+                project_name=project_name,
+                location=location,
+                inspector=inspector,
+                date=datetime.now(),
+                weather=weather,
+                workers_on_site=workers
+            )
         )
-
-        self.inspections[inspection_id] = inspection
-        return inspection
 
     def get_checklist(self, inspection_type: InspectionType) -> List[ChecklistItem]:
         """Get checklist template for inspection type."""

@@ -182,6 +182,7 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional
 from collections import defaultdict
+import uuid
 
 class PunchListManager:
     """Construction punch list management system"""
@@ -191,6 +192,21 @@ class PunchListManager:
         self.storage_path = storage_path or f"punch_{project_id}"
         self.punch_lists: Dict[str, PunchList] = {}
         self.items: Dict[str, PunchItem] = {}
+
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
 
     def create_punch_list(
         self,
@@ -203,21 +219,19 @@ class PunchListManager:
     ) -> PunchList:
         """Create new punch list from walk"""
 
-        list_id = f"PL-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-        punch_list = PunchList(
-            list_id=list_id,
-            project_id=self.project_id,
-            name=name,
-            walk_date=walk_date,
-            walk_attendees=attendees,
-            area=area,
-            list_type=list_type,
-            created_by=created_by
+        return self._insert_new(
+            self.punch_lists, "PL",
+            lambda list_id: PunchList(
+                list_id=list_id,
+                project_id=self.project_id,
+                name=name,
+                walk_date=walk_date,
+                walk_attendees=attendees,
+                area=area,
+                list_type=list_type,
+                created_by=created_by
+            )
         )
-
-        self.punch_lists[list_id] = punch_list
-        return punch_list
 
     def add_item(
         self,

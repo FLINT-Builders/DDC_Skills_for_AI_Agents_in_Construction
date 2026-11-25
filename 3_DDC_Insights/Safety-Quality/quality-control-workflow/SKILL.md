@@ -36,6 +36,7 @@ from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime, timedelta
 import json
+import uuid
 
 class QCStatus(Enum):
     PENDING = "pending"
@@ -128,6 +129,21 @@ class QualityControlManager:
         self.defects: Dict[str, Defect] = {}
         self.ncrs: Dict[str, NonConformanceReport] = {}
 
+    def _insert_new(self, store: dict, prefix: str, build):
+        """Store build(record_id) under an id no existing record holds.
+
+        Timestamps alone repeat within a second, so each id carries a random
+        suffix, and setdefault never replaces a record already stored.
+        """
+        while True:
+            record_id = (
+                f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            record = build(record_id)
+            if store.setdefault(record_id, record) is record:
+                return record
+
     def create_itp(self, work_package: str, inspection_points: List[Dict]) -> List[InspectionPoint]:
         """Create Inspection and Test Plan (ITP)."""
         created = []
@@ -151,16 +167,17 @@ class QualityControlManager:
         if inspection_point_id not in self.inspection_points:
             raise ValueError(f"Inspection point {inspection_point_id} not found")
 
-        inspection_id = f"QCI-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        inspection = QCInspection(
-            id=inspection_id,
-            inspection_point=self.inspection_points[inspection_point_id],
-            location=location,
-            scheduled_date=scheduled_date,
-            inspector=inspector
+        inspection_point = self.inspection_points[inspection_point_id]
+        return self._insert_new(
+            self.inspections, "QCI",
+            lambda inspection_id: QCInspection(
+                id=inspection_id,
+                inspection_point=inspection_point,
+                location=location,
+                scheduled_date=scheduled_date,
+                inspector=inspector
+            )
         )
-        self.inspections[inspection_id] = inspection
-        return inspection
 
     def conduct_inspection(self, inspection_id: str, result: str,
                           measurements: Dict[str, float] = None,
@@ -185,8 +202,6 @@ class QualityControlManager:
                      spec_reference: str, photos: List[str] = None,
                      assigned_to: str = "") -> Defect:
         """Record a defect from inspection."""
-        defect_id = f"DEF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
         # Set due date based on severity
         due_days = {
             DefectSeverity.CRITICAL: 1,
@@ -195,44 +210,43 @@ class QualityControlManager:
             DefectSeverity.COSMETIC: 14
         }
 
-        defect = Defect(
-            id=defect_id,
-            inspection_id=inspection_id,
-            description=description,
-            location=location,
-            severity=severity,
-            spec_reference=spec_reference,
-            photos=photos or [],
-            assigned_to=assigned_to,
-            due_date=datetime.now() + timedelta(days=due_days[severity])
+        return self._insert_new(
+            self.defects, "DEF",
+            lambda defect_id: Defect(
+                id=defect_id,
+                inspection_id=inspection_id,
+                description=description,
+                location=location,
+                severity=severity,
+                spec_reference=spec_reference,
+                photos=photos or [],
+                assigned_to=assigned_to,
+                due_date=datetime.now() + timedelta(days=due_days[severity])
+            )
         )
-
-        self.defects[defect_id] = defect
-        return defect
 
     def create_ncr(self, defect_ids: List[str], title: str,
                   contractor: str, description: str = "") -> NonConformanceReport:
         """Create Non-Conformance Report from defects."""
-        ncr_id = f"NCR-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
         # Collect spec references from defects
         spec_sections = []
         for def_id in defect_ids:
             if def_id in self.defects:
                 spec_sections.append(self.defects[def_id].spec_reference)
 
-        ncr = NonConformanceReport(
-            id=ncr_id,
-            defect_ids=defect_ids,
-            title=title,
-            description=description or self._generate_ncr_description(defect_ids),
-            contractor=contractor,
-            spec_sections=list(set(spec_sections)),
-            response_due=datetime.now() + timedelta(days=5)
+        description = description or self._generate_ncr_description(defect_ids)
+        return self._insert_new(
+            self.ncrs, "NCR",
+            lambda ncr_id: NonConformanceReport(
+                id=ncr_id,
+                defect_ids=defect_ids,
+                title=title,
+                description=description,
+                contractor=contractor,
+                spec_sections=list(set(spec_sections)),
+                response_due=datetime.now() + timedelta(days=5)
+            )
         )
-
-        self.ncrs[ncr_id] = ncr
-        return ncr
 
     def _generate_ncr_description(self, defect_ids: List[str]) -> str:
         """Generate NCR description from defects."""
