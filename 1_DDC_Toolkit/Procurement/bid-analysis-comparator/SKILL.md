@@ -28,6 +28,25 @@ class BidStatus(Enum):
     REJECTED = "rejected"
 
 
+# Bidder-supplied text starting with these is evaluated as a formula by
+# Excel and compatible clients when the workbook is opened.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def neutralize_formula(value: Any) -> Any:
+    """Force a text cell to be read as literal text, never as a formula."""
+    if isinstance(value, str) and value.lstrip(' \t\r\n').startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def neutralize_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply neutralize_formula to every cell and column header."""
+    safe = df.apply(lambda column: column.map(neutralize_formula))
+    safe.columns = [neutralize_formula(c) for c in df.columns]
+    return safe
+
+
 @dataclass
 class EvaluationCriteria:
     name: str
@@ -154,18 +173,17 @@ class BidAnalysisComparator:
         }
 
     def export_analysis(self, output_path: str):
-        df = self.calculate_weighted_scores()
+        df = neutralize_frame(self.calculate_weighted_scores())
+        details = neutralize_frame(pd.DataFrame([{
+            'Bidder': b.bidder_name,
+            'Bid': b.base_bid,
+            'Exclusions': '; '.join(b.exclusions),
+            'Qualifications': '; '.join(b.qualifications)
+        } for b in self.bids.values()]))
+
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Comparison', index=False)
-
-            # Bid details
-            details = [{
-                'Bidder': b.bidder_name,
-                'Bid': b.base_bid,
-                'Exclusions': '; '.join(b.exclusions),
-                'Qualifications': '; '.join(b.qualifications)
-            } for b in self.bids.values()]
-            pd.DataFrame(details).to_excel(writer, sheet_name='Details', index=False)
+            details.to_excel(writer, sheet_name='Details', index=False)
 ```
 
 ## Quick Start
