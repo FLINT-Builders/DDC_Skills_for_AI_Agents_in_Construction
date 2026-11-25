@@ -306,14 +306,17 @@ class ConstructionInfoExtractor:
     """Extract key information from construction documents"""
 
     def __init__(self):
+        # Document text is untrusted: start digit runs only at their first
+        # digit and never let two adjacent \s* split the same whitespace,
+        # or long runs backtrack quadratically.
         self.patterns = {
-            'rfi_number': r'RFI\s*[-#]?\s*(\d+)',
-            'submittal_number': r'(?:Submittal|SI)\s*[-#]?\s*(\d+)',
-            'change_order_number': r'(?:Change Order|CO|PCO)\s*[-#]?\s*(\d+)',
+            'rfi_number': r'RFI(?:\s*[-#])?\s*(\d+)',
+            'submittal_number': r'(?:Submittal|SI)(?:\s*[-#])?\s*(\d+)',
+            'change_order_number': r'(?:Change Order|CO|PCO)(?:\s*[-#])?\s*(\d+)',
             'spec_section': r'Section\s*(\d{2}\s*\d{2}\s*\d{2})',
             'cost_amount': r'\$\s*([\d,]+(?:\.\d{2})?)',
-            'duration_days': r'(\d+)\s*(?:calendar\s+)?days?',
-            'drawing_reference': r'(?:Drawing|Dwg|DWG)\s*[-#]?\s*([A-Z\d-]+)',
+            'duration_days': r'(?<!\d)(\d+)\s*(?:calendar\s+)?days?',
+            'drawing_reference': r'(?:Drawing|Dwg|DWG)(?:\s*[-#])?\s*([A-Z\d-]+)',
             'date': r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
             'contractor_name': r'(?:Contractor|Subcontractor):\s*([^\n]+)',
             'project_name': r'Project:\s*([^\n]+)',
