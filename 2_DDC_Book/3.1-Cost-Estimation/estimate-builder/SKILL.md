@@ -22,11 +22,30 @@ Structured estimate builder that creates professional construction estimates wit
 ## Technical Implementation
 
 ```python
+import numbers
 import pandas as pd
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
+
+
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def excel_safe_text(value: Any) -> Any:
+    """Return a cell value that spreadsheets show as text, never run as a formula.
+
+    Descriptions, codes and notes can come from untrusted imports. openpyxl stores
+    any string starting with '=' as a formula, and Excel/LibreOffice evaluate
+    '+', '-', '@' prefixes when the sheet is re-imported as CSV.
+    """
+    if value is None or isinstance(value, numbers.Number):
+        return value
+    text = str(value)
+    if text.startswith(_FORMULA_PREFIXES) or text.lstrip().startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
 
 
 class CostCategory(Enum):
@@ -229,8 +248,8 @@ class EstimateBuilder:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Cover sheet
             cover_df = pd.DataFrame([{
-                'Project Name': self.project_name,
-                'Project Number': self.project_number,
+                'Project Name': excel_safe_text(self.project_name),
+                'Project Number': excel_safe_text(self.project_number),
                 'Estimate Date': self.estimate_date,
                 'Total Items': len(self.items),
                 'Direct Cost': totals['cost_summary']['direct_cost'],
@@ -240,6 +259,9 @@ class EstimateBuilder:
 
             # Line items
             items_df = self.export_to_df()
+            for column in ('WBS', 'Description', 'Unit', 'Category', 'Notes'):
+                if column in items_df:
+                    items_df[column] = items_df[column].map(excel_safe_text)
             items_df.to_excel(writer, sheet_name='Line Items', index=False)
 
             # Cost breakdown
@@ -249,6 +271,7 @@ class EstimateBuilder:
             # Markups
             if totals['markups']:
                 markups_df = pd.DataFrame(totals['markups'])
+                markups_df['name'] = markups_df['name'].map(excel_safe_text)
                 markups_df.to_excel(writer, sheet_name='Markups', index=False)
 
         return output_path

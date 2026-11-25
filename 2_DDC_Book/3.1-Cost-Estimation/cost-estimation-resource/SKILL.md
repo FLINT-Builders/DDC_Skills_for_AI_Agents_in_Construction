@@ -22,10 +22,29 @@ Resource-based costing separates physical resource consumption (norms) from pric
 ## Technical Implementation
 
 ```python
+import numbers
 import pandas as pd
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+
+
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def excel_safe_text(value: Any) -> Any:
+    """Return a cell value that spreadsheets show as text, never run as a formula.
+
+    Names, codes and units can come from untrusted price books. openpyxl stores
+    any string starting with '=' as a formula, and Excel/LibreOffice evaluate
+    '+', '-', '@' prefixes when the sheet is re-imported as CSV.
+    """
+    if value is None or isinstance(value, numbers.Number):
+        return value
+    text = str(value)
+    if text.startswith(_FORMULA_PREFIXES) or text.lstrip().startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
 
 
 class ResourceType(Enum):
@@ -281,10 +300,10 @@ class ResourceBasedEstimator:
 
             # Line items
             items_data = [{
-                'Code': item.work_item_code,
-                'Description': item.work_item_name,
+                'Code': excel_safe_text(item.work_item_code),
+                'Description': excel_safe_text(item.work_item_name),
                 'Quantity': item.quantity,
-                'Unit': item.unit,
+                'Unit': excel_safe_text(item.unit),
                 'Labor': item.labor_cost,
                 'Material': item.material_cost,
                 'Equipment': item.equipment_cost,
