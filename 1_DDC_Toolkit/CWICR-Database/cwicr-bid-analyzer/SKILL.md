@@ -36,6 +36,27 @@ from enum import Enum
 from collections import defaultdict
 
 
+# Spreadsheet apps evaluate cells starting with these as formulas (DDE, HYPERLINK, ...).
+_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Neutralize bidder-supplied text so it is stored as a literal string, not a formula."""
+    if isinstance(value, str) and (
+        value.startswith(_FORMULA_PREFIXES) or value.lstrip().startswith(_FORMULA_PREFIXES)
+    ):
+        return "'" + value
+    return value
+
+
+def _write_sheet(writer: pd.ExcelWriter, df: pd.DataFrame, sheet_name: str) -> None:
+    """Write a sheet with every text cell passed through _excel_safe."""
+    safe_df = df.copy()
+    for column in safe_df.columns:
+        safe_df[column] = safe_df[column].map(_excel_safe)
+    safe_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+
 class BidStatus(Enum):
     """Bid evaluation status."""
     COMPLIANT = "compliant"
@@ -308,7 +329,7 @@ class CWICRBidAnalyzer:
                 'Status': analysis.status.value,
                 'Flagged Items': len(analysis.flagged_items)
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            _write_sheet(writer, summary_df, 'Summary')
 
             # Line Items
             items_df = pd.DataFrame([
@@ -326,7 +347,7 @@ class CWICRBidAnalyzer:
                 }
                 for i in analysis.line_items
             ])
-            items_df.to_excel(writer, sheet_name='Line Items', index=False)
+            _write_sheet(writer, items_df, 'Line Items')
 
             # Flagged Items
             flagged_df = pd.DataFrame([
@@ -340,7 +361,7 @@ class CWICRBidAnalyzer:
                 }
                 for i in analysis.flagged_items
             ])
-            flagged_df.to_excel(writer, sheet_name='Flagged Items', index=False)
+            _write_sheet(writer, flagged_df, 'Flagged Items')
 
         return output_path
 
@@ -361,14 +382,14 @@ class CWICRBidAnalyzer:
                 }
                 for b in comparison.bids
             ])
-            overview_df.to_excel(writer, sheet_name='Overview', index=False)
+            _write_sheet(writer, overview_df, 'Overview')
 
             # Ranking
             ranking_df = pd.DataFrame([
                 {'Rank': i+1, 'Bidder': name, 'Total': total}
                 for i, (name, total) in enumerate(comparison.ranking)
             ])
-            ranking_df.to_excel(writer, sheet_name='Ranking', index=False)
+            _write_sheet(writer, ranking_df, 'Ranking')
 
         return output_path
 ```
