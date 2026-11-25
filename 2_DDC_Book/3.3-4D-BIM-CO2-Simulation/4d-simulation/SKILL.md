@@ -504,6 +504,21 @@ class SequenceAnalyzer:
 ## Export and Integration
 
 ```python
+def store_formulas_as_text(writer: pd.ExcelWriter):
+    """Keep cell values that start with "=" as text instead of formulas.
+
+    openpyxl stores any string starting with "=" as a formula, and the export
+    never writes intended formulas, so element fields from a linked BIM table
+    must not be evaluated when the workbook is opened.
+    """
+    for worksheet in writer.sheets.values():
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+                    cell.quotePrefix = True
+
+
 def export_4d_schedule(elements: pd.DataFrame, output_path: str):
     """Export 4D schedule to Excel with multiple views"""
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
@@ -526,6 +541,8 @@ def export_4d_schedule(elements: pd.DataFrame, output_path: str):
             'End_Date': 'max'
         }).rename(columns={'ElementId': 'Element_Count'})
         cat_summary.to_excel(writer, sheet_name='By_Category')
+
+        store_formulas_as_text(writer)
 
     return output_path
 ```
