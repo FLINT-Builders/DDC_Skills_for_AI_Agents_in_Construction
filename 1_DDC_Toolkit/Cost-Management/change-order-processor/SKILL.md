@@ -34,6 +34,23 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+
+def _excel_safe_text(value: Any) -> Any:
+    """Prefix formula-like text so spreadsheets show it instead of evaluating it."""
+    if isinstance(value, str) and (value[:1] in _FORMULA_TRIGGERS
+                                   or value.lstrip()[:1] in _FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+
+def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize formula-like text in cells and labels before to_excel."""
+    df = df.apply(lambda column: column.map(_excel_safe_text))
+    return df.rename(index=_excel_safe_text, columns=_excel_safe_text)
+
+
 class ChangeOrderStatus(Enum):
     """Change order status."""
     DRAFT = "draft"
@@ -347,11 +364,11 @@ class ChangeOrderProcessor:
                 {'Metric': 'Change %', 'Value': f"{summary['change_percent']}%"},
                 {'Metric': 'Schedule Impact (days)', 'Value': summary['total_schedule_impact_days']}
             ])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            _excel_safe(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # Change order list
             co_data = [co.to_dict() for co in self.change_orders.values()]
-            pd.DataFrame(co_data).to_excel(writer, sheet_name='Change Orders', index=False)
+            _excel_safe(pd.DataFrame(co_data)).to_excel(writer, sheet_name='Change Orders', index=False)
 
             # Cost details
             cost_data = []
@@ -367,7 +384,7 @@ class ChangeOrderProcessor:
                         'Category': item.category
                     })
             if cost_data:
-                pd.DataFrame(cost_data).to_excel(writer, sheet_name='Cost Details', index=False)
+                _excel_safe(pd.DataFrame(cost_data)).to_excel(writer, sheet_name='Cost Details', index=False)
 
         return output_path
 ```

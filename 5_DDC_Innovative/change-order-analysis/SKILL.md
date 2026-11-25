@@ -416,8 +416,22 @@ class ChangeOrderPredictor:
 
 ```python
 from collections import defaultdict
-from typing import List, Dict
+from typing import Any, List, Dict
 import pandas as pd
+
+_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def _excel_safe_text(value: Any) -> Any:
+    """Prefix formula-like text so spreadsheets show it instead of evaluating it."""
+    if isinstance(value, str) and (value[:1] in _FORMULA_TRIGGERS
+                                   or value.lstrip()[:1] in _FORMULA_TRIGGERS):
+        return "'" + value
+    return value
+
+def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Neutralize formula-like text in cells and labels before to_excel."""
+    df = df.apply(lambda column: column.map(_excel_safe_text))
+    return df.rename(index=_excel_safe_text, columns=_excel_safe_text)
 
 class ChangeOrderAnalyzer:
     """Analyze patterns in change orders"""
@@ -552,20 +566,20 @@ class ChangeOrderAnalyzer:
                 'Total Schedule Impact (days)': self.df['schedule_days'].sum(),
                 'Risk Score': self.calculate_risk_score()
             }])
-            summary.to_excel(writer, sheet_name='Summary', index=False)
+            _excel_safe(summary).to_excel(writer, sheet_name='Summary', index=False)
 
             # By type
-            pd.DataFrame(self.analyze_by_type()).T.to_excel(
+            _excel_safe(pd.DataFrame(self.analyze_by_type()).T).to_excel(
                 writer, sheet_name='By_Type'
             )
 
             # Root causes
-            pd.DataFrame(self.identify_root_causes()).to_excel(
+            _excel_safe(pd.DataFrame(self.identify_root_causes())).to_excel(
                 writer, sheet_name='Root_Causes', index=False
             )
 
             # All COs
-            self.df.to_excel(writer, sheet_name='All_COs', index=False)
+            _excel_safe(self.df).to_excel(writer, sheet_name='All_COs', index=False)
 
         return output_path
 ```
