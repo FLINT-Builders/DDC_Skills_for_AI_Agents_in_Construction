@@ -140,31 +140,57 @@ class CWICRCostCalculator:
         """Create index for fast work item lookup."""
         if 'work_item_code' in self.data.columns:
             self._code_index = self.data.set_index('work_item_code')
+            codes = self.data['work_item_code']
+            self._normalized_codes = (
+                codes.where(codes.notna(), '').astype(str).str.strip().str.lower()
+            )
         else:
             self._code_index = None
+            self._normalized_codes = None
+
+    def _find_work_item(self, work_item_code: str) -> Optional[pd.Series]:
+        """Resolve a code to one database row.
+
+        Codes come from imported takeoffs, so they are compared as literal
+        text and never interpreted as patterns. A partial code that fits more
+        than one work item is treated as not found rather than priced at an
+        arbitrary item.
+        """
+        if self._code_index is None or not work_item_code:
+            return None
+
+        if work_item_code in self._code_index.index:
+            return self._code_index.loc[work_item_code]
+
+        needle = work_item_code.lower()
+        matches = self.data[self._normalized_codes == needle]
+        if matches.empty:
+            matches = self.data[
+                self._normalized_codes.str.contains(needle, regex=False)
+            ]
+
+        if matches.empty or matches['work_item_code'].nunique() != 1:
+            return None
+        return matches.iloc[0]
 
     def calculate_item_cost(self, work_item_code: str,
                             quantity: float,
                             price_overrides: Dict[str, float] = None) -> CostBreakdown:
         """Calculate cost for single work item."""
 
-        # Find work item in database
-        if self._code_index is not None and work_item_code in self._code_index.index:
-            item = self._code_index.loc[work_item_code]
-        else:
-            # Try partial match
-            matches = self.data[
-                self.data['work_item_code'].str.contains(work_item_code, case=False, na=False)
-            ]
-            if matches.empty:
-                return CostBreakdown(
-                    work_item_code=work_item_code,
-                    description="NOT FOUND",
-                    unit="",
-                    quantity=quantity,
-                    status=CostStatus.MISSING_DATA
-                )
-            item = matches.iloc[0]
+        if work_item_code is None or pd.isna(work_item_code):
+            work_item_code = ''
+        work_item_code = str(work_item_code).strip()
+
+        item = self._find_work_item(work_item_code)
+        if item is None:
+            return CostBreakdown(
+                work_item_code=work_item_code,
+                description="NOT FOUND",
+                unit="",
+                quantity=quantity,
+                status=CostStatus.MISSING_DATA
+            )
 
         # Get base costs
         labor_unit = float(item.get('labor_cost', 0) or 0)
