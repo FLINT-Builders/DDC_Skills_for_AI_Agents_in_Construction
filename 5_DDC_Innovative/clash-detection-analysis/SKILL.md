@@ -377,9 +377,23 @@ def run_all_clash_tests(detector: ClashDetector, clash_sets: Dict = None) -> Dic
 ### Export Clash Report
 
 ```python
+# Element names and GlobalIds come from the model, which other parties can edit.
+# A spreadsheet treats text starting with these characters as a formula.
+EXCEL_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r', '\n')
+
+def excel_safe_value(value):
+    """Return text that the spreadsheet will show as-is instead of evaluating."""
+    if isinstance(value, str) and value.startswith(EXCEL_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe_value to every cell before writing the frame to Excel."""
+    return df.apply(lambda column: column.map(excel_safe_value))
+
 def export_clash_report(detector: ClashDetector, output_path: str):
     """Export comprehensive clash report to Excel"""
-    df = detector.get_clash_report()
+    df = excel_safe_frame(detector.get_clash_report())
     summary = detector.get_summary()
 
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
