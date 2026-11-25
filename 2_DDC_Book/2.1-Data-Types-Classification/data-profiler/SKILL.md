@@ -83,9 +83,13 @@ class ConstructionDataProfiler:
         'email': r'^[\w.-]+@[\w.-]+\.\w+$',
         'date_iso': r'^\d{4}-\d{2}-\d{2}',
         'date_us': r'^\d{1,2}/\d{1,2}/\d{2,4}$',
-        'currency': r'^\$?[\d,]+\.?\d{0,2}$',
-        'percentage': r'^\d+\.?\d*%?$',
+        'currency': r'^\$?[\d,]{1,20}(?:\.\d{0,2})?$',
+        'percentage': r'^\d{1,15}(?:\.\d{0,6})?%?$',
     }
+
+    # Values longer than this are never matched against CONSTRUCTION_PATTERNS,
+    # which bounds regex work per cell regardless of the input file.
+    MAX_PATTERN_VALUE_LENGTH = 64
 
     # Construction-specific column name patterns
     COLUMN_TYPE_HINTS = {
@@ -227,7 +231,7 @@ class ConstructionDataProfiler:
         sample = non_null.head(100)
 
         for pattern_name, pattern in self.CONSTRUCTION_PATTERNS.items():
-            matches = sample.str.match(pattern, na=False).sum()
+            matches = self._count_pattern_matches(sample, pattern)
             if matches / len(sample) > 0.8:
                 return pattern_name
 
@@ -244,13 +248,22 @@ class ConstructionDataProfiler:
         patterns_found = []
 
         sample = str_series.head(1000)
+        if len(sample) == 0:
+            return patterns_found
 
         for pattern_name, pattern in self.CONSTRUCTION_PATTERNS.items():
-            matches = sample.str.match(pattern, na=False).sum()
+            matches = self._count_pattern_matches(sample, pattern)
             if matches / len(sample) > 0.1:
                 patterns_found.append(f"{pattern_name} ({matches/len(sample):.0%})")
 
         return patterns_found[:3]
+
+    def _count_pattern_matches(self, sample: pd.Series, pattern: str) -> int:
+        """Count values matching pattern, skipping values too long to be a match."""
+        short_values = sample[sample.str.len() <= self.MAX_PATTERN_VALUE_LENGTH]
+        if len(short_values) == 0:
+            return 0
+        return int(short_values.str.match(pattern, na=False).sum())
 
     def _calculate_quality_score(self, columns: List[ColumnProfile]) -> float:
         """Calculate overall data quality score (0-100)."""
