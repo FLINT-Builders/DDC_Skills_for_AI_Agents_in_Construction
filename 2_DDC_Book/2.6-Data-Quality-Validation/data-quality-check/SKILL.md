@@ -18,6 +18,7 @@ Based on DDC methodology (Chapter 2.6), this skill provides comprehensive data q
 ## Quick Start
 
 ```python
+import numpy as np
 import pandas as pd
 
 # Load construction data
@@ -27,7 +28,7 @@ df = pd.read_excel("bim_export.xlsx")
 quality_score = {
     'completeness': (1 - df.isnull().sum().sum() / df.size) * 100,
     'unique_ids': df['ElementId'].nunique() == len(df),
-    'valid_volumes': (df['Volume_m3'] >= 0).all()
+    'valid_volumes': (np.isfinite(df['Volume_m3']) & (df['Volume_m3'] >= 0)).all()
 }
 
 print(f"Completeness: {quality_score['completeness']:.1f}%")
@@ -44,6 +45,22 @@ import pandas as pd
 import numpy as np
 import re
 from datetime import datetime, timedelta
+
+
+def finite_in_range(series, min_val=None, max_val=None):
+    """Boolean mask: value is a finite number within [min_val, max_val].
+
+    NaN, NA, +/-inf and non-numeric values are False. A plain between() with
+    an open bound of np.inf would accept inf.
+    """
+    values = pd.to_numeric(series, errors='coerce').to_numpy(dtype='float64', na_value=np.nan)
+    mask = np.isfinite(values)
+    if min_val is not None:
+        mask &= values >= min_val
+    if max_val is not None:
+        mask &= values <= max_val
+    return pd.Series(mask, index=series.index)
+
 
 class DataQualityChecker:
     """Comprehensive data quality assessment for construction data"""
@@ -93,9 +110,8 @@ class DataQualityChecker:
         accuracy = {}
         for col, bounds in rules.items():
             if col in self.df.columns:
-                valid = self.df[col].between(
-                    bounds.get('min', -np.inf),
-                    bounds.get('max', np.inf)
+                valid = finite_in_range(
+                    self.df[col], bounds.get('min'), bounds.get('max')
                 ).sum()
                 total = self.df[col].notna().sum()
                 accuracy[col] = (valid / total * 100) if total > 0 else 100
@@ -347,7 +363,7 @@ class ValidationRulesBuilder:
             'min': min_val,
             'max': max_val,
             'check': lambda df, col=column, mn=min_val, mx=max_val:
-                df[col].between(mn or -np.inf, mx or np.inf).all()
+                finite_in_range(df[col], mn, mx).all()
         })
         return self
 
