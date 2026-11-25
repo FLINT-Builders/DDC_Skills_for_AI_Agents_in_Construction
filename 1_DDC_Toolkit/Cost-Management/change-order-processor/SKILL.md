@@ -256,6 +256,8 @@ class ChangeOrderProcessor:
             raise ValueError(f"Change order {co_number} not found")
 
         co = self.change_orders[co_number]
+        if co.status != ChangeOrderStatus.PENDING_APPROVAL:
+            raise ValueError("Must be pending approval")
 
         co.approvals.append(ApprovalRecord(
             approver_name=approver,
