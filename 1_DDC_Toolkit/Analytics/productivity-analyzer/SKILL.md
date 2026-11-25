@@ -21,12 +21,39 @@ Analyze labor productivity data to identify trends, compare to benchmarks, and p
 ## Technical Implementation
 
 ```python
+import numbers
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
+
+
+# Leading characters that make Excel, LibreOffice or Google Sheets treat a cell as a formula.
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+CONTROL_TRIGGERS = ('\t', '\r', '\n')
+
+
+def _excel_safe(value: Any) -> Any:
+    """Return a cell value that spreadsheets store as text, never as a formula.
+
+    pandas writes anything that is not a number, bool or date as str(value),
+    so every such value is converted and checked here, not only str inputs.
+    """
+    if value is None or value is pd.NA or isinstance(
+        value, (bool, np.bool_, numbers.Number, date, timedelta, np.datetime64, np.timedelta64)
+    ):
+        return value
+    text = value if isinstance(value, str) else str(value)
+    if text.startswith(CONTROL_TRIGGERS) or text.lstrip().startswith(FORMULA_TRIGGERS):
+        return "'" + text
+    return text
+
+
+def _excel_frame(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Build a DataFrame whose cells are all safe to write to Excel."""
+    return pd.DataFrame([{key: _excel_safe(val) for key, val in row.items()} for row in rows])
 
 
 class ProductivityStatus(Enum):
@@ -286,7 +313,7 @@ class ProductivityAnalyzer:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary
             analyses = self.analyze_all_activities()
-            summary_df = pd.DataFrame([
+            summary_df = _excel_frame([
                 {
                     'Activity': a.activity_code,
                     'Description': a.description,
@@ -304,11 +331,11 @@ class ProductivityAnalyzer:
             # Problems
             problems = self.identify_problem_areas()
             if problems:
-                problems_df = pd.DataFrame(problems)
+                problems_df = _excel_frame(problems)
                 problems_df.to_excel(writer, sheet_name='Problem Areas', index=False)
 
             # Raw data
-            records_df = pd.DataFrame([
+            records_df = _excel_frame([
                 {
                     'Date': r.date,
                     'Activity': r.activity_code,
