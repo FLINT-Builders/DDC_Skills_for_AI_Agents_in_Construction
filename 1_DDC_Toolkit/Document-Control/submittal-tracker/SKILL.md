@@ -134,7 +134,18 @@ class SubmittalTracker:
             'Required': s.required_date,
             'Approved': s.approved_date
         } for s in self.submittals.values()]
-        pd.DataFrame(data).to_excel(output_path, index=False)
+        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            pd.DataFrame(data).to_excel(writer, index=False, sheet_name="Sheet1")
+            _store_formulas_as_text(writer.sheets["Sheet1"])
+
+
+def _store_formulas_as_text(worksheet) -> None:
+    # The log holds no intended formulas. openpyxl turns any string starting with
+    # "=" into a formula, and these strings come from contractor-supplied fields.
+    for row in worksheet.iter_rows():
+        for cell in row:
+            if cell.data_type == "f":
+                cell.data_type = "s"
 ```
 
 ## Quick Start
