@@ -125,6 +125,36 @@ RELATED_ITEMS = {
 }
 
 
+# Descriptions and units come from takeoff input. Excel writers store any
+# string that starts with "=" as a formula, and spreadsheet apps evaluate CSV
+# cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export."""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
+
 class CWICRTakeoffHelper:
     """Assist with quantity takeoff using CWICR data."""
 
@@ -381,7 +411,8 @@ class CWICRTakeoffHelper:
                 }
                 for item in items
             ])
-            df.to_excel(writer, sheet_name='Takeoff', index=False)
+            escape_excel_formulas(df).to_excel(
+                writer, sheet_name='Takeoff', index=False)
 
         return output_path
 ```

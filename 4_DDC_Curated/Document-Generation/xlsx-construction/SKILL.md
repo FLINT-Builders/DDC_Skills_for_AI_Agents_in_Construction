@@ -180,6 +180,33 @@ def create_rfi_log(output_path: str):
 ```python
 import pandas as pd
 
+# Category and type names come from the BIM export. Excel writers store any
+# string that starts with "=" as a formula, and spreadsheet apps evaluate CSV
+# cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export."""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
 def process_qto_from_bim(bim_xlsx: str, output_path: str):
     """Process BIM export for quantity takeoff."""
     # Read BIM export
@@ -199,7 +226,8 @@ def process_qto_from_bim(bim_xlsx: str, output_path: str):
 
     # Create workbook with formatting
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        qto.to_excel(writer, sheet_name='QTO Summary', index=False)
+        escape_excel_formulas(qto).to_excel(
+            writer, sheet_name='QTO Summary', index=False)
 
         # Get workbook to apply formatting
         wb = writer.book

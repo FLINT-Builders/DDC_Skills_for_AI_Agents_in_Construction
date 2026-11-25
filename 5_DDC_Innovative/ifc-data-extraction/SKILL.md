@@ -349,6 +349,35 @@ class IFCGeometryExtractor:
 ### Export to Various Formats
 
 ```python
+import pandas as pd
+
+# Element, level, space, and material names come from the IFC model. Excel
+# writers store any string that starts with "=" as a formula, and spreadsheet
+# apps evaluate CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+def escape_excel_formulas(df):
+    """Return a copy whose cells, index, and column labels are safe to export"""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
 class IFCExporter:
     """Export IFC data to various formats"""
 
@@ -360,28 +389,34 @@ class IFCExporter:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Project info
             project_info = pd.DataFrame([self.extractor.get_project_info()])
-            project_info.to_excel(writer, sheet_name='Project', index=False)
+            escape_excel_formulas(project_info).to_excel(
+                writer, sheet_name='Project', index=False)
 
             # All elements
             if include_all:
                 elements = self.extractor.get_all_elements()
-                elements.to_excel(writer, sheet_name='Elements', index=False)
+                escape_excel_formulas(elements).to_excel(
+                    writer, sheet_name='Elements', index=False)
 
             # Quantities
             quantities = self.extractor.extract_quantities()
-            quantities.to_excel(writer, sheet_name='Quantities', index=False)
+            escape_excel_formulas(quantities).to_excel(
+                writer, sheet_name='Quantities', index=False)
 
             # Levels
             levels = self.extractor.extract_levels()
-            levels.to_excel(writer, sheet_name='Levels', index=False)
+            escape_excel_formulas(levels).to_excel(
+                writer, sheet_name='Levels', index=False)
 
             # Spaces
             spaces = self.extractor.extract_spaces()
-            spaces.to_excel(writer, sheet_name='Spaces', index=False)
+            escape_excel_formulas(spaces).to_excel(
+                writer, sheet_name='Spaces', index=False)
 
             # Materials
             materials = self.extractor.extract_materials()
-            materials.to_excel(writer, sheet_name='Materials', index=False)
+            escape_excel_formulas(materials).to_excel(
+                writer, sheet_name='Materials', index=False)
 
         return output_path
 
@@ -399,7 +434,8 @@ class IFCExporter:
         }
 
         for filename, df in exports.items():
-            df.to_csv(os.path.join(output_dir, filename), index=False)
+            escape_excel_formulas(df).to_csv(
+                os.path.join(output_dir, filename), index=False)
 
         return output_dir
 

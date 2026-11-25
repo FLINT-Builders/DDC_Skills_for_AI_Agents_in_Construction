@@ -54,6 +54,36 @@ class QTOReport:
     generated_date: str
 
 
+# Category, type, and level names come from the BIM export. Excel writers store
+# any string that starts with "=" as a formula, and spreadsheet apps evaluate
+# CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export."""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
+
 class BIMQuantityTakeoff:
     """Extract quantities from BIM data."""
 
@@ -282,16 +312,16 @@ class BIMQuantityTakeoff:
 
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # Summary by category
-            self.group_by_category().to_excel(
+            escape_excel_formulas(self.group_by_category()).to_excel(
                 writer, sheet_name='By Category', index=False)
 
             # Summary by type
-            self.group_by_type().to_excel(
+            escape_excel_formulas(self.group_by_type()).to_excel(
                 writer, sheet_name='By Type', index=False)
 
             # Level breakdown
             try:
-                self.pivot_by_level_and_type().to_excel(
+                escape_excel_formulas(self.pivot_by_level_and_type()).to_excel(
                     writer, sheet_name='Level-Type Matrix')
             except:
                 pass
@@ -299,16 +329,19 @@ class BIMQuantityTakeoff:
             # Walls
             walls = self.get_walls()
             if not walls.empty:
-                walls.to_excel(writer, sheet_name='Walls', index=False)
+                escape_excel_formulas(walls).to_excel(
+                    writer, sheet_name='Walls', index=False)
 
             # Doors and Windows
             doors = self.get_doors()
             if not doors.empty:
-                doors.to_excel(writer, sheet_name='Doors', index=False)
+                escape_excel_formulas(doors).to_excel(
+                    writer, sheet_name='Doors', index=False)
 
             windows = self.get_windows()
             if not windows.empty:
-                windows.to_excel(writer, sheet_name='Windows', index=False)
+                escape_excel_formulas(windows).to_excel(
+                    writer, sheet_name='Windows', index=False)
 
         return output_path
 ```

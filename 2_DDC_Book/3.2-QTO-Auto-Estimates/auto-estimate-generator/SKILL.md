@@ -75,6 +75,36 @@ class EstimateItem:
     wbs_code: str = ""
 
 
+# Project, element, and rule names come from QTO and pricing data. Excel writers
+# store any string that starts with "=" as a formula, and spreadsheet apps
+# evaluate CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export."""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
+
 class AutoEstimateGenerator:
     """Generate estimates from QTO data automatically."""
 
@@ -253,7 +283,8 @@ class AutoEstimateGenerator:
                 'Mapping Rate %': result['mapping_rate'],
                 'Total Cost': result['total_cost']
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            escape_excel_formulas(summary_df).to_excel(
+                writer, sheet_name='Summary', index=False)
 
             # Estimate items
             items_df = pd.DataFrame([{
@@ -266,19 +297,22 @@ class AutoEstimateGenerator:
                 'WBS': item.wbs_code,
                 'Rule': item.rule_applied
             } for item in self.estimate_items])
-            items_df.to_excel(writer, sheet_name='Estimate', index=False)
+            escape_excel_formulas(items_df).to_excel(
+                writer, sheet_name='Estimate', index=False)
 
             # By element type
             by_type_df = pd.DataFrame([
                 {'Element Type': k, 'Cost': v}
                 for k, v in self.get_cost_by_element_type().items()
             ])
-            by_type_df.to_excel(writer, sheet_name='By Type', index=False)
+            escape_excel_formulas(by_type_df).to_excel(
+                writer, sheet_name='By Type', index=False)
 
             # Unmapped items
             unmapped_df = self.get_unmapped_summary()
             if not unmapped_df.empty:
-                unmapped_df.to_excel(writer, sheet_name='Unmapped', index=False)
+                escape_excel_formulas(unmapped_df).to_excel(
+                    writer, sheet_name='Unmapped', index=False)
 
         return output_path
 

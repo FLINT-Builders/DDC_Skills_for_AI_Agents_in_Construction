@@ -27,6 +27,33 @@ The QTO process is central to 5D BIM:
 ```python
 import pandas as pd
 
+# Category, level, and material names come from the BIM export. Excel writers
+# store any string that starts with "=" as a formula, and spreadsheet apps
+# evaluate CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+def escape_excel_formulas(df):
+    """Return a copy whose cells, index, and column labels are safe to export"""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
 # Load BIM element data
 df = pd.read_csv("revit_export.csv")
 
@@ -41,7 +68,7 @@ qto = df.groupby('Category').agg({
 qto['Unit_Price'] = [150, 80, 450, 200]  # $/m³
 qto['Total_Cost'] = qto['Volume'] * qto['Unit_Price']
 
-qto.to_excel("qto_report.xlsx")
+escape_excel_formulas(qto).to_excel("qto_report.xlsx")
 ```
 
 ## Core QTO Functions
@@ -109,7 +136,7 @@ def generate_multi_level_qto(df):
 
 # Usage
 qto = generate_multi_level_qto(df)
-qto.to_excel("qto_multi_level.xlsx")
+escape_excel_formulas(qto).to_excel("qto_multi_level.xlsx")
 ```
 
 ### QTO with Pivot Table
@@ -132,7 +159,7 @@ def generate_qto_pivot(df, values='Volume', index='Level', columns='Category'):
 
 # Usage - Volume by Level and Category
 qto_pivot = generate_qto_pivot(df, values='Volume')
-qto_pivot.to_excel("qto_pivot.xlsx")
+escape_excel_formulas(qto_pivot).to_excel("qto_pivot.xlsx")
 ```
 
 ## Cost Calculation from QTO
@@ -174,7 +201,7 @@ prices = pd.DataFrame({
 
 # Calculate
 cost_estimate = calculate_cost_from_qto(qto, prices)
-cost_estimate.to_excel("cost_estimate.xlsx", index=False)
+escape_excel_formulas(cost_estimate).to_excel("cost_estimate.xlsx", index=False)
 ```
 
 ### Apply Rules from Excel
@@ -325,7 +352,7 @@ def material_breakdown_qto(df):
 
 # Usage
 material_qto = material_breakdown_qto(df)
-material_qto.to_excel("material_breakdown.xlsx")
+escape_excel_formulas(material_qto).to_excel("material_breakdown.xlsx")
 ```
 
 ### QTO with Waste Factors
@@ -394,16 +421,16 @@ def export_qto_report(qto_df, base_name, include_charts=True):
     # Excel with multiple sheets
     with pd.ExcelWriter(f"{base_name}.xlsx", engine='openpyxl') as writer:
         # Summary sheet
-        qto_df.to_excel(writer, sheet_name='Summary')
+        escape_excel_formulas(qto_df).to_excel(writer, sheet_name='Summary')
 
         # Detailed data
         if hasattr(qto_df, 'reset_index'):
-            qto_df.reset_index().to_excel(
+            escape_excel_formulas(qto_df.reset_index()).to_excel(
                 writer, sheet_name='Details', index=False
             )
 
     # CSV for integration
-    qto_df.to_csv(f"{base_name}.csv")
+    escape_excel_formulas(qto_df).to_csv(f"{base_name}.csv")
 
     # JSON for API
     qto_df.reset_index().to_json(

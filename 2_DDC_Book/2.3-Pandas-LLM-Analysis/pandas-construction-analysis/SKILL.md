@@ -284,7 +284,37 @@ df = pd.concat([df, new_elements], ignore_index=True)
 
 ### Quantity Take-Off (QTO)
 
+Category, material, and level names come from the BIM export. Pass every
+DataFrame through `escape_excel_formulas` before `to_excel` or `to_csv`, so a
+label such as `=HYPERLINK(...)` is saved as text instead of a live formula.
+
 ```python
+# Excel writers store any string that starts with "=" as a formula, and
+# spreadsheet apps evaluate CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+def escape_excel_formulas(df):
+    """Return a copy whose cells, index, and column labels are safe to export"""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
 def generate_qto_report(df):
     """Generate Quantity Take-Off summary by category"""
     qto = df.groupby(['Category', 'Material']).agg(
@@ -302,7 +332,7 @@ def generate_qto_report(df):
 
 # Usage
 qto_report = generate_qto_report(df)
-qto_report.to_excel("qto_report.xlsx")
+escape_excel_formulas(qto_report).to_excel("qto_report.xlsx")
 ```
 
 ### Cost Estimation
@@ -377,12 +407,13 @@ def analyze_by_level(df):
 def export_to_excel_formatted(df, summary, filepath):
     """Export with multiple sheets"""
     with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='Details', index=False)
-        summary.to_excel(writer, sheet_name='Summary')
+        escape_excel_formulas(df).to_excel(
+            writer, sheet_name='Details', index=False)
+        escape_excel_formulas(summary).to_excel(writer, sheet_name='Summary')
 
         pivot = pd.pivot_table(df, values='Volume_m3',
                                index='Level', columns='Category')
-        pivot.to_excel(writer, sheet_name='By_Level')
+        escape_excel_formulas(pivot).to_excel(writer, sheet_name='By_Level')
 
 # Usage
 export_to_excel_formatted(elements, qto_summary, "project_report.xlsx")
@@ -391,14 +422,15 @@ export_to_excel_formatted(elements, qto_summary, "project_report.xlsx")
 ### Export to CSV
 
 ```python
-# Basic export
-df.to_csv("output.csv", index=False)
+# Basic export (escape_excel_formulas is defined in the QTO section)
+escape_excel_formulas(df).to_csv("output.csv", index=False)
 
 # With encoding for special characters
-df.to_csv("output.csv", index=False, encoding='utf-8-sig')
+escape_excel_formulas(df).to_csv("output.csv", index=False, encoding='utf-8-sig')
 
 # Specific columns
-df[['ElementId', 'Category', 'Volume_m3']].to_csv("volumes.csv", index=False)
+escape_excel_formulas(df[['ElementId', 'Category', 'Volume_m3']]).to_csv(
+    "volumes.csv", index=False)
 ```
 
 ## Performance Tips
@@ -430,7 +462,7 @@ print(df.memory_usage(deep=True).sum() / 1024**2, "MB")
 | Pivot table | `pd.pivot_table(df, values='Vol', index='Level')` |
 | Merge | `df1.merge(df2, on='key')` |
 | Add column | `df['New'] = df['A'] * df['B']` |
-| Export Excel | `df.to_excel("out.xlsx", index=False)` |
+| Export Excel | `escape_excel_formulas(df).to_excel("out.xlsx", index=False)` |
 
 ## Resources
 
