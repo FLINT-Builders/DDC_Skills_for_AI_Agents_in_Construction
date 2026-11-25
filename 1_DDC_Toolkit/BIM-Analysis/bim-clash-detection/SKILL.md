@@ -384,7 +384,14 @@ mep_clashes = [c for c in detector.clashes
 
 ### 2. Export for Review
 ```python
+# Element names come from the model; keep a leading =, +, -, @ from becoming a formula.
+def excel_safe_value(value):
+    if isinstance(value, str) and value.startswith(('=', '+', '-', '@', '\t', '\r', '\n')):
+        return "'" + value
+    return value
+
 df = detector.export_to_dataframe()
+df = df.apply(lambda column: column.map(excel_safe_value))
 df.to_excel("clash_report.xlsx", index=False)
 ```
 
