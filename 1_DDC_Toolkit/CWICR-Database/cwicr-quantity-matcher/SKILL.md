@@ -120,6 +120,36 @@ UNIT_CONVERSIONS = {
 }
 
 
+# BIM categories, descriptions, and units come from the model. Excel writers
+# store any string that starts with "=" as a formula, and spreadsheet apps
+# evaluate CSV cells that start with any of these characters.
+def _escape_excel_text(value):
+    if isinstance(value, str) and value.lstrip(" ").startswith(
+            ("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+def _escape_excel_labels(labels):
+    if isinstance(labels, pd.MultiIndex):
+        return pd.MultiIndex.from_arrays(
+            [labels.get_level_values(i).map(_escape_excel_text)
+             for i in range(labels.nlevels)],
+            names=[_escape_excel_text(name) for name in labels.names]
+        )
+    return labels.map(_escape_excel_text).rename(_escape_excel_text(labels.name))
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy whose cells, index, and column labels are safe to export."""
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+    safe = df.apply(lambda column: column.map(_escape_excel_text))
+    safe.index = _escape_excel_labels(df.index)
+    safe.columns = _escape_excel_labels(df.columns)
+    return safe
+
+
 class CWICRQuantityMatcher:
     """Match BIM quantities to CWICR work items."""
 
@@ -356,7 +386,8 @@ class CWICRQuantityMatcher:
                 'Needs Review': result.needs_review,
                 'Match Rate %': round(result.matched / result.total_elements * 100, 1) if result.total_elements > 0 else 0
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            escape_excel_formulas(summary_df).to_excel(
+                writer, sheet_name='Summary', index=False)
 
             # Matches
             matches_df = pd.DataFrame([
@@ -376,15 +407,18 @@ class CWICRQuantityMatcher:
                 }
                 for m in result.matches
             ])
-            matches_df.to_excel(writer, sheet_name='Matches', index=False)
+            escape_excel_formulas(matches_df).to_excel(
+                writer, sheet_name='Matches', index=False)
 
             # Needs Review
             review_df = matches_df[matches_df['Confidence'].isin(['low', 'manual'])]
-            review_df.to_excel(writer, sheet_name='Needs Review', index=False)
+            escape_excel_formulas(review_df).to_excel(
+                writer, sheet_name='Needs Review', index=False)
 
             # Unmatched
             unmatched_df = pd.DataFrame(result.unmatched_elements)
-            unmatched_df.to_excel(writer, sheet_name='Unmatched', index=False)
+            escape_excel_formulas(unmatched_df).to_excel(
+                writer, sheet_name='Unmatched', index=False)
 
         return output_path
 
