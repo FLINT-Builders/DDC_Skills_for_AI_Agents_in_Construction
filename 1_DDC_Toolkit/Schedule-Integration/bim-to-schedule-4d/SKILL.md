@@ -16,6 +16,21 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+def store_formulas_as_text(writer: pd.ExcelWriter):
+    """Keep cell values that start with "=" as text instead of formulas.
+
+    openpyxl stores any string starting with "=" as a formula, and the export
+    never writes intended formulas, so imported schedule and BIM fields must
+    not be evaluated when the workbook is opened.
+    """
+    for worksheet in writer.sheets.values():
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+                    cell.quotePrefix = True
+
+
 class LinkStatus(Enum):
     LINKED = "linked"
     UNLINKED = "unlinked"
@@ -169,7 +184,9 @@ class BIMSchedule4D:
                 'Type': link.link_type,
                 'Status': link.status.value
             })
-        pd.DataFrame(data).to_excel(output_path, index=False)
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            pd.DataFrame(data).to_excel(writer, index=False)
+            store_formulas_as_text(writer)
 ```
 
 ## Quick Start
