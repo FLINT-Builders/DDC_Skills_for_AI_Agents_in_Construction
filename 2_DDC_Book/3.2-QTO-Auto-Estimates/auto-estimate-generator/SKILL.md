@@ -28,6 +28,23 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+FORMULA_TRIGGERS = ('=', '+', '-', '@')
+
+
+def excel_safe_text(value: Any) -> Any:
+    """Keep text that a spreadsheet would read as a formula stored as text."""
+    if isinstance(value, str) and (
+        value.lstrip().startswith(FORMULA_TRIGGERS) or value.startswith(('\t', '\r', '\n'))
+    ):
+        return "'" + value
+    return value
+
+
+def excel_safe_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply excel_safe_text to every cell before writing to a workbook."""
+    return df.apply(lambda column: column.map(excel_safe_text))
+
+
 class ElementType(Enum):
     WALL = "wall"
     FLOOR = "floor"
@@ -253,7 +270,7 @@ class AutoEstimateGenerator:
                 'Mapping Rate %': result['mapping_rate'],
                 'Total Cost': result['total_cost']
             }])
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            excel_safe_frame(summary_df).to_excel(writer, sheet_name='Summary', index=False)
 
             # Estimate items
             items_df = pd.DataFrame([{
@@ -266,19 +283,19 @@ class AutoEstimateGenerator:
                 'WBS': item.wbs_code,
                 'Rule': item.rule_applied
             } for item in self.estimate_items])
-            items_df.to_excel(writer, sheet_name='Estimate', index=False)
+            excel_safe_frame(items_df).to_excel(writer, sheet_name='Estimate', index=False)
 
             # By element type
             by_type_df = pd.DataFrame([
                 {'Element Type': k, 'Cost': v}
                 for k, v in self.get_cost_by_element_type().items()
             ])
-            by_type_df.to_excel(writer, sheet_name='By Type', index=False)
+            excel_safe_frame(by_type_df).to_excel(writer, sheet_name='By Type', index=False)
 
             # Unmapped items
             unmapped_df = self.get_unmapped_summary()
             if not unmapped_df.empty:
-                unmapped_df.to_excel(writer, sheet_name='Unmapped', index=False)
+                excel_safe_frame(unmapped_df).to_excel(writer, sheet_name='Unmapped', index=False)
 
         return output_path
 
