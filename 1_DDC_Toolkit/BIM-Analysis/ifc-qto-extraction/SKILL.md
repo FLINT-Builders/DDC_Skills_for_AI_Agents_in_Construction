@@ -117,6 +117,33 @@ class QuantityItem:
     zone: str = ""
 
 
+# Leading characters that Excel, LibreOffice or a CSV import treat as the start
+# of a formula (including full-width forms and control characters).
+FORMULA_TRIGGERS = ('=', '+', '-', '@', '\uff1d', '\uff0b', '\uff0d', '\uff20')
+CONTROL_TRIGGERS = ('\t', '\r', '\n')
+
+
+def excel_text(value) -> str:
+    """Return model-supplied text in a form spreadsheets will not evaluate.
+
+    Category, type and level names come from whoever authored the model, so a
+    name such as "=SUM(Detail!E:E)" must reach the workbook as plain text.
+    """
+    text = '' if value is None else str(value)
+    if text.startswith(CONTROL_TRIGGERS) or text.lstrip().startswith(FORMULA_TRIGGERS):
+        return "'" + text
+    return text
+
+
+def force_literal_cells(workbook) -> None:
+    """Store every cell openpyxl inferred as a formula as a plain string."""
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == 'f':
+                    cell.data_type = 's'
+
+
 class BIMQuantityExtractor:
     """Extract quantities from BIM models using DDC converters"""
 
@@ -295,17 +322,17 @@ class BIMQuantityExtractor:
     ) -> str:
         """Generate QTO Excel report"""
 
-        # Convert to DataFrame
+        # Convert to DataFrame; names are model-supplied, so neutralize formulas
         records = []
         for q in quantities:
             records.append({
-                'Category': q.category,
-                'Type': q.type_name,
+                'Category': excel_text(q.category),
+                'Type': excel_text(q.type_name),
                 'Count': q.count,
                 'Area (m²)': round(q.area, 2),
                 'Volume (m³)': round(q.volume, 3),
                 'Length (m)': round(q.length, 2),
-                'Level': q.level
+                'Level': excel_text(q.level)
             })
 
         df = pd.DataFrame(records)
@@ -335,6 +362,9 @@ class BIMQuantityExtractor:
                     'Volume (m³)': 'sum'
                 }).round(2)
                 level_summary.to_excel(writer, sheet_name='By Level')
+
+            # The report contains no intended formulas
+            force_literal_cells(writer.book)
 
         return output_path
 
