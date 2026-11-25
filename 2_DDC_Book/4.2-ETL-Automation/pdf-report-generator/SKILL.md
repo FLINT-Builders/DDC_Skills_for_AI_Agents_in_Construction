@@ -26,7 +26,13 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
+from html import escape
 from io import BytesIO
+
+
+def _esc(value: Any) -> str:
+    """Encode a value for use in HTML element text or a quoted attribute."""
+    return escape(str(value), quote=True)
 
 
 class ReportType(Enum):
@@ -264,7 +270,7 @@ class PDFReportGenerator:
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{self.project_name} Report</title>
+    <title>{_esc(self.project_name)} Report</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 40px; }}
         .header {{ background: #2196F3; color: white; padding: 20px; margin-bottom: 20px; }}
@@ -290,30 +296,30 @@ class PDFReportGenerator:
             if section.section_type == SectionType.HEADER:
                 html += f"""
     <div class="header">
-        <h1>{section.title}</h1>
-        <p>{section.content.get('subtitle', '')}</p>
+        <h1>{_esc(section.title)}</h1>
+        <p>{_esc(section.content.get('subtitle', ''))}</p>
     </div>
 """
             elif section.section_type == SectionType.TEXT:
                 html += f"""
     <div class="section">
-        <h2 class="section-title">{section.title}</h2>
-        <p>{section.content}</p>
+        <h2 class="section-title">{_esc(section.title)}</h2>
+        <p>{_esc(section.content)}</p>
     </div>
 """
             elif section.section_type == SectionType.KPI_CARDS:
                 html += f"""
     <div class="section">
-        <h2 class="section-title">{section.title}</h2>
+        <h2 class="section-title">{_esc(section.title)}</h2>
         <div class="kpi-grid">
 """
                 for kpi in section.content:
                     status_class = f"status-{kpi['status']}" if kpi['status'] != 'normal' else ''
                     html += f"""
-            <div class="kpi-card {status_class}">
-                <div class="kpi-name">{kpi['name']}</div>
-                <div class="kpi-value">{kpi['value']}</div>
-                <div class="kpi-target">Target: {kpi['target'] or 'N/A'}</div>
+            <div class="kpi-card {_esc(status_class)}">
+                <div class="kpi-name">{_esc(kpi['name'])}</div>
+                <div class="kpi-value">{_esc(kpi['value'])}</div>
+                <div class="kpi-target">Target: {_esc(kpi['target'] or 'N/A')}</div>
             </div>
 """
                 html += "</div></div>"
@@ -321,19 +327,19 @@ class PDFReportGenerator:
             elif section.section_type == SectionType.TABLE:
                 html += f"""
     <div class="section">
-        <h2 class="section-title">{section.title}</h2>
+        <h2 class="section-title">{_esc(section.title)}</h2>
         <table>
             <tr>
 """
                 if section.content:
                     for key in section.content[0].keys():
-                        html += f"<th>{key}</th>"
+                        html += f"<th>{_esc(key)}</th>"
                     html += "</tr>"
 
                     for row in section.content:
                         html += "<tr>"
                         for value in row.values():
-                            html += f"<td>{value}</td>"
+                            html += f"<td>{_esc(value)}</td>"
                         html += "</tr>"
 
                 html += "</table></div>"
