@@ -477,22 +477,31 @@ class SequenceAnalyzer:
             if row['ElementId'] in graph:
                 graph[row['ElementId']]['duration'] = (row['End_Date'] - row['Start_Date']).days
 
-        # Find longest path (simplified critical path)
-        def longest_path(node, memo={}):
-            if node in memo:
-                return memo[node]
-
-            if not graph[node]['predecessors']:
-                return graph[node]['duration']
-
-            max_pred = max(
-                longest_path(pred, memo) for pred in graph[node]['predecessors']
-            )
-            memo[node] = max_pred + graph[node]['duration']
-            return memo[node]
-
-        # Get all path lengths
-        path_lengths = {elem: longest_path(elem) for elem in graph.keys()}
+        # Find longest path (simplified critical path).
+        # Explicit stack: dependency chains can be longer than Python's recursion limit.
+        path_lengths = {}
+        for root in graph:
+            if root in path_lengths:
+                continue
+            on_path = {root}
+            stack = [(root, iter(graph[root]['predecessors']))]
+            while stack:
+                node, pending = stack[-1]
+                for pred in pending:
+                    if pred in path_lengths:
+                        continue
+                    if pred in on_path:
+                        raise ValueError(f"Dependency cycle through element {pred}")
+                    on_path.add(pred)
+                    stack.append((pred, iter(graph[pred]['predecessors'])))
+                    break
+                else:
+                    stack.pop()
+                    on_path.discard(node)
+                    path_lengths[node] = graph[node]['duration'] + max(
+                        (path_lengths[pred] for pred in graph[node]['predecessors']),
+                        default=0
+                    )
 
         # Critical path elements
         max_length = max(path_lengths.values())
