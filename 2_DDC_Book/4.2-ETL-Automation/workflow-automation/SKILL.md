@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import keyword
+import re
 
 
 class TaskStatus(Enum):
@@ -414,6 +416,18 @@ class WorkflowAutomation:
 
         workflow = self.workflows[workflow_id]
 
+        # Task IDs become Python identifiers in the DAG; all other strings are
+        # written only as escaped literals via ascii().
+        task_ids = {t.task_id for t in workflow.tasks}
+        for task in workflow.tasks:
+            if not self._is_python_identifier(task.task_id):
+                raise ValueError(f"Invalid task_id for Airflow DAG: {task.task_id!r}")
+            for dep in task.dependencies:
+                if dep not in task_ids:
+                    raise ValueError(f"Unknown dependency {dep!r} for task {task.task_id!r}")
+
+        schedule = workflow.schedule.value if workflow.schedule else "daily"
+
         dag_code = f'''
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -428,10 +442,10 @@ default_args = {{
 }}
 
 dag = DAG(
-    '{workflow.workflow_id}',
+    {ascii(str(workflow.workflow_id))},
     default_args=default_args,
-    description='{workflow.description}',
-    schedule_interval='@{workflow.schedule.value if workflow.schedule else "daily"}',
+    description={ascii(str(workflow.description))},
+    schedule_interval={ascii('@' + str(schedule))},
     catchup=False
 )
 
@@ -440,12 +454,12 @@ dag = DAG(
         for task in workflow.tasks:
             dag_code += f'''
 def {task.task_id}_func(**kwargs):
-    # Task: {task.name}
-    # Type: {task.task_type}
+    # Task: {ascii(str(task.name))}
+    # Type: {ascii(str(task.task_type))}
     pass
 
 {task.task_id} = PythonOperator(
-    task_id='{task.task_id}',
+    task_id={ascii(task.task_id)},
     python_callable={task.task_id}_func,
     dag=dag
 )
@@ -458,6 +472,12 @@ def {task.task_id}_func(**kwargs):
                 dag_code += f"{dep} >> {task.task_id}\n"
 
         return dag_code
+
+    @staticmethod
+    def _is_python_identifier(value: Any) -> bool:
+        return (isinstance(value, str)
+                and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value) is not None
+                and not keyword.iskeyword(value))
 
     def get_execution_history(self, workflow_id: str) -> List[Dict[str, Any]]:
         """Get workflow execution history."""
