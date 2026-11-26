@@ -26,6 +26,7 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
+from html import escape
 
 
 class KPICategory(Enum):
@@ -271,12 +272,13 @@ class KPIDashboard:
 
         summary = self.get_dashboard_summary()
         current = self.get_current_values()
+        project_name = escape(str(self.project_name))
 
         html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>KPI Dashboard - {self.project_name}</title>
+    <title>KPI Dashboard - {project_name}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
         .header {{ background: #2196F3; color: white; padding: 20px; margin-bottom: 20px; }}
@@ -291,8 +293,8 @@ class KPIDashboard:
 </head>
 <body>
     <div class="header">
-        <h1>{self.project_name} - KPI Dashboard</h1>
-        <p>Last updated: {summary['date']}</p>
+        <h1>{project_name} - KPI Dashboard</h1>
+        <p>Last updated: {escape(str(summary['date']))}</p>
     </div>
     <div class="kpi-grid">
 """
@@ -300,10 +302,10 @@ class KPIDashboard:
         for kpi_id, value in current.items():
             kpi = self.kpis[kpi_id]
             html += f"""
-        <div class="kpi-card {value.status.value}">
-            <div class="kpi-name">{kpi.name}</div>
-            <div class="kpi-value">{value.value:.2f} {kpi.unit}</div>
-            <div>Target: {kpi.target} | Trend: {value.trend.value}</div>
+        <div class="kpi-card {escape(str(value.status.value))}">
+            <div class="kpi-name">{escape(str(kpi.name))}</div>
+            <div class="kpi-value">{escape(format(value.value, '.2f'))} {escape(str(kpi.unit))}</div>
+            <div>Target: {escape(str(kpi.target))} | Trend: {escape(str(value.trend.value))}</div>
         </div>
 """
 
