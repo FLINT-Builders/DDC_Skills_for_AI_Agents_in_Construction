@@ -93,6 +93,7 @@ DwgExporter.exe "C:\Drawings\FloorPlan.dwg"
 ## Python Implementation
 
 ```python
+import html as html_lib
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -358,11 +359,14 @@ class BIMQuantityExtractor:
         total_area = sum(q.area for q in quantities)
         total_volume = sum(q.volume for q in quantities)
 
+        # Names come from the model; encode them so they render as text
+        safe_project = html_lib.escape(str(project_name), quote=True)
+
         html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>QTO Report - {project_name}</title>
+    <title>QTO Report - {safe_project}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
         .header {{ background: #2c3e50; color: white; padding: 20px; margin-bottom: 20px; }}
@@ -381,7 +385,7 @@ class BIMQuantityExtractor:
 <body>
     <div class="header">
         <h1>Quantity Takeoff Report</h1>
-        <p>Project: {project_name}</p>
+        <p>Project: {safe_project}</p>
     </div>
 
     <div class="summary">
@@ -423,7 +427,7 @@ class BIMQuantityExtractor:
 
             html += f"""
             <tr class="category-header">
-                <td>{category}</td>
+                <td>{html_lib.escape(str(category), quote=True)}</td>
                 <td class="number">{cat_count:,}</td>
                 <td class="number">{cat_area:,.2f}</td>
                 <td class="number">{cat_volume:,.3f}</td>
@@ -433,7 +437,7 @@ class BIMQuantityExtractor:
             for item in sorted(items, key=lambda x: x.type_name):
                 html += f"""
             <tr>
-                <td>&nbsp;&nbsp;&nbsp;{item.type_name}</td>
+                <td>&nbsp;&nbsp;&nbsp;{html_lib.escape(str(item.type_name), quote=True)}</td>
                 <td class="number">{item.count:,}</td>
                 <td class="number">{item.area:,.2f}</td>
                 <td class="number">{item.volume:,.3f}</td>
