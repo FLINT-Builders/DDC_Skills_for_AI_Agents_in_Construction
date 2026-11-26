@@ -22,6 +22,7 @@ Generate interactive Gantt charts from schedule data with dependency visualizati
 
 ```python
 import pandas as pd
+from html import escape
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -203,12 +204,14 @@ class GanttChartGenerator:
 
         start, end = self.get_project_range()
         total_days = (end - start).days + 1
+        # Project and task names come from imported schedules; encode them for HTML.
+        project_name = escape(str(self.project_name))
 
         html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Gantt Chart - {self.project_name}</title>
+    <title>Gantt Chart - {project_name}</title>
     <style>
         .gantt {{ font-family: Arial, sans-serif; }}
         .task {{ display: flex; margin: 2px 0; height: 25px; align-items: center; }}
@@ -222,7 +225,7 @@ class GanttChartGenerator:
 </head>
 <body>
     <div class="gantt">
-        <h2>{self.project_name}</h2>
+        <h2>{project_name}</h2>
         <p>{start} - {end}</p>
 """
 
@@ -232,12 +235,13 @@ class GanttChartGenerator:
             progress_width = width * task.progress / 100
 
             indent = "&nbsp;" * (task.level * 4)
+            task_name = escape(str(task.name))
 
             if task.is_milestone:
-                html += f'<div class="task"><div class="task-name">{indent}{task.name}</div><div class="task-bar"><div class="milestone" style="left:{left}%"></div></div></div>\n'
+                html += f'<div class="task"><div class="task-name">{indent}{task_name}</div><div class="task-bar"><div class="milestone" style="left:{left}%"></div></div></div>\n'
             else:
                 html += f'''<div class="task">
-    <div class="task-name">{indent}{task.name}</div>
+    <div class="task-name">{indent}{task_name}</div>
     <div class="task-bar">
         <div class="bar bar-fill" style="left:{left}%; width:{width}%"></div>
         <div class="bar bar-progress" style="left:{left}%; width:{progress_width}%"></div>
