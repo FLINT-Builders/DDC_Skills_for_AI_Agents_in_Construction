@@ -48,6 +48,7 @@ ImportExcelToRevit.exe <model.rvt> <data.xlsx> [options]
 ### Python Implementation
 
 ```python
+import re
 import subprocess
 import pandas as pd
 from pathlib import Path
@@ -128,7 +129,20 @@ class ExcelToRevitImporter:
 
 
 class DynamoScriptGenerator:
-    """Generate Dynamo scripts for Revit data import."""
+    """Generate Dynamo scripts for Revit data import.
+
+    Caller-supplied strings are written into the generated source only as
+    escaped Python literals (ascii()/json.dumps), never as raw code.
+    """
+
+    CATEGORY_PATTERN = re.compile(r'[A-Za-z][A-Za-z0-9_]*')
+
+    @classmethod
+    def _validate_category(cls, category: str) -> str:
+        """Accept only a BuiltInCategory suffix such as 'Walls' or 'Doors'."""
+        if not isinstance(category, str) or not cls.CATEGORY_PATTERN.fullmatch(category):
+            raise ValueError(f"Invalid Revit category: {category!r}")
+        return category
 
     def generate_parameter_update_script(self,
                                          mappings: Dict[str, str],
@@ -137,6 +151,7 @@ class DynamoScriptGenerator:
         """Generate Dynamo Python script for parameter updates."""
 
         mappings_json = json.dumps(mappings)
+        excel_path_literal = ascii(str(excel_path))
 
         script = f'''
 # Dynamo Python Script - Excel to Revit Parameter Update
@@ -156,7 +171,7 @@ from Autodesk.Revit.DB import *
 import Microsoft.Office.Interop.Excel as Excel
 
 # Configuration
-excel_path = r'{excel_path}'
+excel_path = {excel_path_literal}
 mappings = {mappings_json}
 
 # Open Excel
@@ -237,7 +252,10 @@ OUT = f"Updated: {{updated_count}}, Errors: {{error_count}}"
                                   output_path: str) -> str:
         """Generate script to create Revit schedule from Excel structure."""
 
+        category = self._validate_category(category)
         fields_json = json.dumps(fields)
+        category_literal = ascii(f"OST_{category}")
+        schedule_name_literal = ascii(str(schedule_name))
 
         script = f'''
 # Dynamo Python Script - Create Schedule
@@ -255,13 +273,13 @@ doc = DocumentManager.Instance.CurrentDBDocument
 fields = {fields_json}
 
 # Get category
-category = Category.GetCategory(doc, BuiltInCategory.OST_{category})
+category = Category.GetCategory(doc, getattr(BuiltInCategory, {category_literal}))
 
 TransactionManager.Instance.EnsureInTransaction(doc)
 
 # Create schedule
 schedule = ViewSchedule.CreateSchedule(doc, category.Id)
-schedule.Name = "{schedule_name}"
+schedule.Name = {schedule_name_literal}
 
 # Add fields
 definition = schedule.Definition
