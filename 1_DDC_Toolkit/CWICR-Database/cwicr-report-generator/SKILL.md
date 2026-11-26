@@ -17,7 +17,13 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from html import escape
 import json
+
+
+def _text(value: Any) -> str:
+    """HTML-encode a value for use in element content or a quoted attribute."""
+    return escape(str(value), quote=True)
 
 
 @dataclass
@@ -89,7 +95,7 @@ class CWICRReportGenerator:
 
         rows = ""
         for category, cost in sorted(breakdown.items(), key=lambda x: -x[1]):
-            rows += f"<tr><td>{category}</td><td class='amount'>${cost:,.2f}</td></tr>"
+            rows += f"<tr><td>{_text(category)}</td><td class='amount'>${cost:,.2f}</td></tr>"
 
         content = f"""
         <table class="detail-table">
@@ -116,10 +122,10 @@ class CWICRReportGenerator:
         for item in items[:50]:  # Limit for report
             rows += f"""
             <tr>
-                <td>{item.get('code', '')}</td>
-                <td>{item.get('description', '')[:50]}</td>
+                <td>{_text(item.get('code', ''))}</td>
+                <td>{_text(str(item.get('description', ''))[:50])}</td>
                 <td>{item.get('quantity', 0):,.2f}</td>
-                <td>{item.get('unit', '')}</td>
+                <td>{_text(item.get('unit', ''))}</td>
                 <td class="amount">${item.get('unit_price', 0):,.2f}</td>
                 <td class="amount">${item.get('total', 0):,.2f}</td>
             </tr>
@@ -153,7 +159,7 @@ class CWICRReportGenerator:
         for section in self.sections:
             sections_html += f"""
             <section class="report-section">
-                <h2>{section.title}</h2>
+                <h2>{_text(section.title)}</h2>
                 {section.content}
             </section>
             """
@@ -162,7 +168,7 @@ class CWICRReportGenerator:
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Cost Report - {self.project_name}</title>
+    <title>Cost Report - {_text(self.project_name)}</title>
     <style>
         body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
         .report-container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
@@ -182,9 +188,9 @@ class CWICRReportGenerator:
     <div class="report-container">
         <h1>Cost Estimation Report</h1>
         <div class="meta">
-            <p>Project: {self.project_name}</p>
+            <p>Project: {_text(self.project_name)}</p>
             <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-            <p>Currency: {self.currency}</p>
+            <p>Currency: {_text(self.currency)}</p>
         </div>
         {sections_html}
         <footer style="margin-top: 40px; color: #95a5a6; text-align: center;">
